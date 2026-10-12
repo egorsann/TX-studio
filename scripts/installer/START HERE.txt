@@ -1,0 +1,17 @@
+TX Studio - thermomagnetic curve viewer with automatic dry-run correction
+==========================================================================
+
+Install (recommended):
+  Double-click "Install TX Studio.cmd".
+  It copies the app to your user folder, adds a "TX Studio" shortcut to the
+  Start Menu and the Desktop, and starts it. No admin rights needed.
+  Run it again later to update to a newer version.
+
+Or just run it from here:
+  Double-click "TX Studio.exe".
+
+If Windows says "Windows protected your PC":
+  click "More info" -> "Run anyway" (the app is not code-signed).
+
+Requirements: Windows 10 or 11, 64-bit. Nothing else.
+Uninstall: "Uninstall TX Studio.cmd" in %LOCALAPPDATA%\Programs\TX Studio
