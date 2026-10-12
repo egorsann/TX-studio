@@ -35,19 +35,19 @@ That's it: TX Studio is copied to `%LOCALAPPDATA%\Programs\TX Studio`, gets a
 * **Transitions** (Po, Mag, Hem / T<sub>V</sub>, T<sub>M</sub>) sit as small labels above the
   plot; click one to zoom onto the data at that temperature (its line flashes yellow).
 * **Overlays** keep the run-type colours; every curve gets a small tag in its own colour
-  naming the file by the part between specimen ID and run code (`ER26PB012-30SH1` → `30S`).
-  Tags are made unique only where needed (`27 L1` / `27 L2`, `002 · 31` / `012 · 31`).
+  naming the file by the part between specimen ID and run code (`AB24CD112-30SH1` → `30S`).
+  Tags are made unique only where needed (`27 L1` / `27 L2`, `101 · 31` / `112 · 31`).
 * **Export** (`Ctrl+E` this run, `Ctrl+Shift+E` / *Export all*) writes the corrected files.
 
 File names are expected to start with the specimen ID and end with the run code
-(`H1`, `L1`, `L2`, …), e.g. `ER26PB002-27H1.cur`, `ER26PB002-27L1.clw`.
+(`H1`, `L1`, `L2`, …), e.g. `AB24CD101-27H1.cur`, `AB24CD101-27L1.clw`.
 
 ### The three parts
 
 **Sidebar.** The folder tree, reduced to thermomagnetic runs (`.cur` = high-T furnace,
 `.clw` = low-T cryostat). An `_Im` (out-of-phase) file is merged into its run (`Im` badge),
 the instrument record (`.KHT`/`.KLT`) supplies the date. Single-child folders are compacted
-(`ER26PB002_TX / ER26PB002_TX_raw`), exported `_corr` folders are hidden (filter menu).
+(`AB24CD101_TX / AB24CD101_TX_raw`), exported `_corr` folders are hidden (filter menu).
 Files stay in alphabetical order; runs of the same piece (`27H1`, `27L1`, `27L2`) share a
 faint background band, alternating per group like Finder's row stripes.
 The **Empty holders** panel at the bottom lists every empty-holder run that was found.

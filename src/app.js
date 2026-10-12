@@ -337,7 +337,7 @@ function renderTree() {
 
 function emit(v, depth, out, q) {
   for (const d of v.dirs) {
-    // compact single-child chains: ER26PB002_TX / ER26PB002_TX_raw
+    // compact single-child chains: AB24CD101_TX / AB24CD101_TX_raw
     let cur = d; const names = [d.node.name];
     while (!cur.files.length && !cur.others.length && cur.dirs.length === 1) { cur = cur.dirs[0]; names.push(cur.node.name); }
     const open = q ? true : state.expanded.has(cur.node.path);
@@ -967,14 +967,39 @@ function note(kind, html) {
   return n;
 }
 
+/** Card that collapses to its heading, a status mark (green check / amber warning) and a
+ *  one-line summary; the body opens on click. */
+function collapsibleCard(title, status, summary, body, isOpen, setOpen) {
+  const card = h("div", { class: `card collapsible${isOpen() ? " open" : ""}` });
+  const head = h("button", { class: "card-head", "aria-expanded": String(isOpen()) });
+  head.innerHTML = ICON.chev;
+  head.append(h("span", { class: "card-title" }, title));
+  const mark = h("span", { class: `card-status ${status}`, title: status === "ok" ? "Everything looks right" : "Needs a look – open for details" });
+  mark.innerHTML = status === "ok" ? ICON.ok : ICON.warn;
+  head.append(mark);
+  head.addEventListener("click", () => {
+    setOpen(!isOpen());
+    card.classList.toggle("open", isOpen());
+    head.setAttribute("aria-expanded", String(isOpen()));
+  });
+  card.append(head, h("div", { class: "card-summary" }, summary), h("div", { class: "card-body" }, body));
+  return card;
+}
+
+let corrOpen = false;        // the empty-holder card starts collapsed; stays as set while the app runs
+
 function correctionCard(r) {
-  const card = h("div", { class: "card" }, h("h3", {}, "Empty-holder correction"));
+  const body = document.createDocumentFragment();
+  const issues = [];
   const cands = candidatesFor(r);
   const pair = dryFor(r);
+  const card = (summary) => collapsibleCard("Empty-holder correction", issues.length ? "warn" : "ok", summary, body,
+    () => corrOpen, (v) => { corrOpen = v; });
   if (!cands.length) {
-    card.append(note("warn", `No ${r.kind === "HT" ? "high-T (.cur)" : "low-T (.clw)"} empty-holder run found in or near this folder. ` +
+    issues.push("none");
+    body.append(note("warn", `No ${r.kind === "HT" ? "high-T (.cur)" : "low-T (.clw)"} empty-holder run found in or near this folder. ` +
       `Put it in a <code>holder</code> folder next to the data, or right-click a run › <i>Use as empty holder</i>.`));
-    return card;
+    return card("No empty-holder run found – uncorrected");
   }
   // empty-holder picker
   const sel = h("select", {});
@@ -990,48 +1015,64 @@ function correctionCard(r) {
     if (sel.value) state.s.overrides[r.main] = sel.value; else delete state.s.overrides[r.main];
     persist(); renderViewer(); renderDryPanel();
   });
-  card.append(h("div", { class: "field" }, h("label", {}, "Empty holder"), sel));
+  body.append(h("div", { class: "field" }, h("label", {}, "Empty holder"), sel));
 
-  const radio = h("div", { class: "radio" });
-  for (const [v, label] of [["nearest", "Nearest in time"], ["preceding", "Latest before the run"]]) {
-    const inp = h("input", { type: "radio", name: "rule", value: v, checked: state.s.rule === v });
-    inp.addEventListener("change", () => { saveSettings({ rule: v }); renderViewer(); renderDryPanel(); renderStatusRight(); });
-    radio.append(h("label", {}, inp, label));
+  // how the automatic choice is made -- only relevant while it is automatic
+  if (pair.auto) {
+    const radio = h("div", { class: "radio" });
+    for (const [v, label] of [["nearest", "Nearest in time"], ["preceding", "Latest before the run"]]) {
+      const inp = h("input", { type: "radio", name: "rule", value: v, checked: state.s.rule === v });
+      inp.addEventListener("change", () => { saveSettings({ rule: v }); renderViewer(); renderDryPanel(); renderStatusRight(); });
+      radio.append(h("label", {}, inp, label));
+    }
+    body.append(h("div", { class: "field" }, h("label", {}, "Automatic pairing"), radio));
   }
-  card.append(h("div", { class: "field" }, h("label", {}, "Automatic pairing"), radio));
-  card.append(holderSmoothingField(pair.dry, true));
+  body.append(holderSmoothingField(pair.dry, true));
+  const spec = smoothFor(pair.dry);
+  if (spec.mode === "none") issues.push("smoothing");
 
   const res = correctionFor(r);
+  let gapShort = "date unknown";
   if (res) {
     const st = res.cin.stats;
     const gap = r.time != null && pair.dry.time != null ? pair.dry.time - r.time : null;
-    card.append(h("dl", { class: "kv", style: "margin-top:12px" },
+    if (gap != null) {
+      const days = Math.round(Math.abs(gap) / DAY);
+      gapShort = days === 0 ? "same day" : `${days} d ${gap > 0 ? "later" : "earlier"}`;
+    }
+    body.append(h("dl", { class: "kv", style: "margin-top:12px" },
       h("dt", {}, "Empty holder measured"), h("dd", {}, fmtDate(pair.dry.time)),
       h("dt", {}, ""), h("dd", { class: "delta" }, gap == null ? "run date unknown" : Math.round(Math.abs(gap) / DAY) === 0 ? "same day as the run" : `${fmtDays(gap)} the run`),
       h("dt", {}, "Empty holder T range"), h("dd", {}, `${st.holderTmin.toFixed(1)} … ${st.holderTmax.toFixed(1)} °C`),
       h("dt", {}, "Out-of-phase"), h("dd", {}, res.cout ? "corrected" : r.curveIm ? "empty holder has no _Im" : "no _Im file")));
+    if (r.curveIm && !res.cout) issues.push("im");
     if (gap != null && Math.abs(gap) > 30 * DAY) {
-      card.append(note("warn", `The empty holder was measured ${fmtDays(gap)} this run — the holder signal drifts, a closer empty-holder run would be better.`));
+      issues.push("gap");
+      body.append(note("warn", `The empty holder was measured ${fmtDays(gap)} this run — the holder signal drifts, a closer empty-holder run would be better.`));
     }
     if (st.cold || st.warm) {
       const pts = (n) => `${n} point${n === 1 ? "" : "s"}`;
       const parts = [];
       if (st.warm) parts.push(`${pts(st.warm)} warmer than ${st.holderTmax.toFixed(1)} °C`);
       if (st.cold) parts.push(`${pts(st.cold)} colder than ${st.holderTmin.toFixed(1)} °C`);
-      card.append(note("warn", `${parts.join(" and ")} — outside the empty holder's range. Its end value is used there (shaded in the plot).`));
+      // a stray start/end point is normal; a stretch of the curve beyond the holder is not
+      const many = st.cold + st.warm > Math.max(3, st.n * 0.02);
+      if (many) issues.push("range");
+      body.append(note(many ? "warn" : "info", `${parts.join(" and ")} — outside the empty holder's range. Its end value is used there (shaded in the plot).`));
     }
     const cmp = st.compare;
     if (cmp) {
       const tag = r.curve.emptyTag;
       if (cmp.mean < 0.1) {
-        card.append(note("ok", `Matches the correction stored in the file (mean |Δ| ${cmp.mean.toFixed(3)}, max ${cmp.max.toFixed(2)} ×10⁻⁶ SI).`));
+        body.append(note("ok", `Matches the correction stored in the file (mean |Δ| ${cmp.mean.toFixed(3)}, max ${cmp.max.toFixed(2)} ×10⁻⁶ SI).`));
       } else {
-        card.append(note("info", `The file carries an older correction${tag ? ` (against <code>…${esc(tag)}</code>)` : ""}, ` +
+        body.append(note("info", `The file carries an older correction${tag ? ` (against <code>…${esc(tag)}</code>)` : ""}, ` +
           `${cmp.mean.toFixed(2)} ×10⁻⁶ SI off on average. It is replaced by the correction against <b>${esc(pair.dry.stem)}</b>.`));
       }
     }
   }
-  return card;
+  const smoothShort = spec.mode === "none" ? "not smoothed" : spec.mode === "stored" ? "smoothing from file" : `mean of ${spec.n}`;
+  return card(`${pair.dry.stem} · ${gapShort} · ${smoothShort}${pair.auto ? "" : " · chosen by hand"}`);
 }
 
 function dryCard(r) {

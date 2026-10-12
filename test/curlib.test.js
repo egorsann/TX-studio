@@ -58,78 +58,93 @@ test("fixed-width parse copes with touching columns", () => {
 });
 
 test("run labels", () => {
-  assert.deepEqual(L.runLabel("ER26PB002-27H1", "ER26PB002_TX_raw"), { spec: "ER26PB002", piece: "27", run: "H1" });
-  assert.deepEqual(L.runLabel("ER26PB015-22+23-L2", "ER26PB015_TX_raw"), { spec: "ER26PB015", piece: "22+23", run: "L2" });
+  assert.deepEqual(L.runLabel("AB24CD101-27H1", "AB24CD101_TX_raw"), { spec: "AB24CD101", piece: "27", run: "H1" });
+  assert.deepEqual(L.runLabel("AB24CD115-22+23-L2", "AB24CD115_TX_raw"), { spec: "AB24CD115", piece: "22+23", run: "L2" });
   assert.equal(L.outputDir("C:\\a\\X_TX\\X_TX_raw"), "C:\\a\\X_TX\\X_TX_corr");
   // specimen ID from the file name when the folder doesn't carry it
-  assert.deepEqual(L.runLabel("ER26PB012-30SH1", "any folder"), { spec: "ER26PB012", piece: "30S", run: "H1" });
-  assert.deepEqual(L.runLabel("ER26PB002-9-10L2", "any folder"), { spec: "ER26PB002", piece: "9-10", run: "L2" });
+  assert.deepEqual(L.runLabel("AB24CD112-30SH1", "any folder"), { spec: "AB24CD112", piece: "30S", run: "H1" });
+  assert.deepEqual(L.runLabel("AB24CD101-9-10L2", "any folder"), { spec: "AB24CD101", piece: "9-10", run: "L2" });
 });
 
-test("smoothing reproduces every smoothed holder file exactly", { skip: !HAVE }, () => {
-  const holders = walk(path.join(DATA, "holder_corrections")).filter(L.isCurveFile);
-  assert.ok(holders.length >= 4);
-  for (const p of holders) {
-    const c = L.parseCurve(fs.readFileSync(p, "latin1"));
-    const s = L.runningMean(c.rows.map((r) => r.tsusc), 5);
-    const worst = Math.max(...s.map((v, i) => Math.abs(v - c.rows[i].csusc)));
-    assert.ok(worst < 0.006, `${path.basename(p)}: worst ${worst}`);
-  }
-});
-
-test("dry runs detected, pairing picks the nearest-in-time holder", { skip: !HAVE }, () => {
+// ---- real data (any folder of runs with empty holders; nothing below names a file)
+function loadRuns() {
   const files = walk(DATA);
   const runs = L.groupRuns(files.filter(L.isCurveFile));
-  const recs = new Map();
   for (const r of runs) {
+    r.curve = L.parseCurve(fs.readFileSync(r.main, "latin1"));
     const rp = L.findRecordPath(r.main, files);
     r.record = rp ? L.parseRecord(fs.readFileSync(rp, "latin1")) : null;
-    r.dry = L.looksLikeDryRun(r, r.record);
+    r.time = r.record ? r.record.start : null;
+    r.out = /_corr$/i.test(path.basename(r.dir));
+    r.dry = !r.out && L.looksLikeDryRun(r, r.record);
   }
+  return runs.filter((r) => !r.out && r.curve.rows.length);
+}
+
+test("stored empty-holder smoothing is a running mean the app reproduces exactly", { skip: !HAVE }, () => {
+  const holders = loadRuns().filter((r) => r.dry && L.hasStoredSmoothing(r.curve.rows));
+  assert.ok(holders.length >= 1);
+  for (const h of holders) assert.ok(L.storedSmoothingN(h.curve.rows) > 0, path.basename(h.main));
+});
+
+test("empty holders detected; pairing picks the nearest / latest-before holder", { skip: !HAVE }, () => {
+  const runs = loadRuns();
   const dry = runs.filter((r) => r.dry);
-  assert.equal(dry.length, 4);
-  const sample = runs.find((r) => /ER26PB012-31H1/.test(r.main) && /_raw/.test(r.main));
-  const cands = dry.filter((d) => d.kind === sample.kind).map((d) => ({ run: d, time: d.record.start }));
-  const pick = L.pairDryRun(sample.record.start, cands, "nearest");
-  assert.match(pick.run.stem, /260901/);
-  const pre = L.pairDryRun(new Date(2026, 7, 30).getTime(), cands, "preceding");
-  assert.equal(pre.run.stem, "DRHOTSTUFF");
+  assert.ok(dry.length >= 1);
+  let n = 0;
+  for (const s of runs.filter((r) => !r.dry && r.time != null)) {
+    const cands = dry.filter((d) => d.kind === s.kind && d.time != null).map((d) => ({ run: d, time: d.time }));
+    if (!cands.length) continue;
+    const near = L.pairDryRun(s.time, cands, "nearest");
+    assert.equal(Math.abs(near.time - s.time), Math.min(...cands.map((c) => Math.abs(c.time - s.time))));
+    const pre = L.pairDryRun(s.time, cands, "preceding");
+    if (cands.some((c) => c.time <= s.time)) assert.ok(pre.time <= s.time);
+    n++;
+  }
+  assert.ok(n >= 1);
 });
 
 test("correction agrees with the CSUSC stored in the files (same holder)", { skip: !HAVE }, () => {
-  const feb = path.join(DATA, "holder_corrections", "TX_holder_correction_2026_260224");
-  const H = { HT: L.parseCurve(fs.readFileSync(path.join(feb, "DRHOTSTUFF.cur"), "latin1")),
-              LT: L.parseCurve(fs.readFileSync(path.join(feb, "MRFREEZ.clw"), "latin1")) };
-  const raws = walk(DATA).filter((p) => /_raw/.test(p) && L.isCurveFile(p) && !L.isIm(p));
+  const runs = loadRuns();
+  const dry = runs.filter((r) => r.dry);
   let n = 0;
-  for (const p of raws) {
-    const s = L.parseCurve(fs.readFileSync(p, "latin1"));
-    if (!/HOTSTUFF|FREEZ$/i.test(s.emptyTag)) continue;           // stored vs Feb holder only
-    const corr = L.correctCurve(s, H[L.kindOf(p)], 5);
-    if (!corr.stats.compare) continue;                          // file carries no stored correction
-    assert.ok(corr.stats.compare.mean < 0.07, `${path.basename(p)} mean ${corr.stats.compare.mean}`);
+  for (const s of runs.filter((r) => !r.dry && r.curve.emptyTag && L.hasStoredSmoothing(r.curve.rows))) {
+    // the header names the holder it was corrected with (its last 9 characters)
+    const h = dry.find((d) => d.kind === s.kind && d.stem.slice(-9).toUpperCase() === s.curve.emptyTag.toUpperCase());
+    if (!h) continue;
+    const corr = L.correctCurve(s.curve, h.curve, { mode: "stored" });
+    assert.ok(corr.stats.compare.mean < 0.07, `${path.basename(s.main)} mean ${corr.stats.compare.mean}`);
     n++;
   }
-  assert.ok(n >= 4, `checked ${n}`);
+  assert.ok(n >= 1, `checked ${n}`);
 });
 
 test("written file round-trips and keeps untouched columns", { skip: !HAVE }, () => {
-  const dir = path.join(DATA, "ER26PB002_TX", "ER26PB002_TX_raw");
-  const p = path.join(dir, "ER26PB002-27H1.cur");
-  const s = L.parseCurve(fs.readFileSync(p, "latin1"));
-  const h = L.parseCurve(fs.readFileSync(path.join(DATA, "holder_corrections", "TX_holder_correction_260901", "DRHOTSTUFF260901.cur"), "latin1"));
-  const corr = L.correctCurve(s, h, 5);
-  const txt = L.writeCurve(s, corr, "DRHOTSTUFF260901");
-  const back = L.parseCurve(txt);
-  assert.equal(back.rows.length, s.rows.length);
-  assert.equal(back.emptyTag, "UFF260901");
+  const runs = loadRuns();
+  const s = runs.find((r) => !r.dry && runs.some((d) => d.dry && d.kind === r.kind));
+  const h = runs.find((d) => d.dry && d.kind === s.kind);
+  const corr = L.correctCurve(s.curve, h.curve, 5);
+  const back = L.parseCurve(L.writeCurve(s.curve, corr, h.stem));
+  assert.equal(back.rows.length, s.curve.rows.length);
+  assert.equal(back.emptyTag, h.stem.slice(-9));
   back.rows.forEach((r, i) => {
-    assert.equal(r.temp, s.rows[i].temp);
-    assert.equal(r.tsusc, s.rows[i].tsusc);
-    assert.equal(r.time, s.rows[i].time);
-    assert.equal(r.tail, s.rows[i].tail);
+    assert.equal(r.temp, s.curve.rows[i].temp);
+    assert.equal(r.tsusc, s.curve.rows[i].tsusc);
+    assert.equal(r.time, s.curve.rows[i].time);
+    assert.equal(r.tail, s.curve.rows[i].tail);
     assert.equal(r.csusc, corr.csusc[i]);
   });
+});
+
+test("pairing rules on made-up dates", () => {
+  const day = 86400000, at = (d) => new Date(2024, 0, d).getTime();
+  const cands = [{ run: "jan02", time: at(2) }, { run: "jan20", time: at(20) }, { run: "undated", time: null }];
+  assert.equal(L.pairDryRun(at(10), cands, "nearest").run, "jan02");
+  assert.equal(L.pairDryRun(at(17), cands, "nearest").run, "jan20");
+  assert.equal(L.pairDryRun(at(17), cands, "preceding").run, "jan02");
+  assert.equal(L.pairDryRun(at(1), cands, "preceding").run, "jan02");     // nothing earlier: nearest
+  assert.equal(L.pairDryRun(null, cands, "nearest").run, "jan20");        // undated run: newest holder
+  assert.ok(day > 0);
 });
 
 test("runs pair across inconsistent separators", () => {
@@ -142,7 +157,7 @@ test("runs pair across inconsistent separators", () => {
   assert.equal(lt.stem, "X-13+15+16-L1");
 });
 
-test("dry-run lookup: first bracketing pair, end values outside", () => {
+test("empty-holder lookup: first bracketing pair, end values outside", () => {
   const rows = (pairs) => pairs.map(([temp, tsusc]) => ({ temp, tsusc }));
   // heating holder with a temperature wobble at 30 -> 29 -> 31; smoothing off (N = 1)
   const h = rows([[20, 0], [30, 10], [29, 12], [31, 14], [40, 20], [35, 30], [25, 40]]);
@@ -156,13 +171,13 @@ test("dry-run lookup: first bracketing pair, end values outside", () => {
 
 test("overlay tags: piece, made unique only where needed", () => {
   const it = (id, stem) => ({ id, ...L.runLabel(stem, "x"), kind: /H\d$/.test(stem) ? "HT" : "LT" });
-  const tags = L.overlayTags([it(1, "ER26PB012-30SH1"), it(2, "ER26PB002-9-10L2"), it(3, "ER26PB002-27L1"),
-    it(4, "ER26PB002-27L2"), it(5, "ER26PB002-27H1"), it(6, "ER26PB002-31H1"), it(7, "ER26PB012-31H1")]);
+  const tags = L.overlayTags([it(1, "AB24CD112-30SH1"), it(2, "AB24CD101-9-10L2"), it(3, "AB24CD101-27L1"),
+    it(4, "AB24CD101-27L2"), it(5, "AB24CD101-27H1"), it(6, "AB24CD101-31H1"), it(7, "AB24CD112-31H1")]);
   assert.equal(tags.get(1), "30S");
   assert.equal(tags.get(2), "9-10");
   assert.equal(tags.get(3), "27 L1");          // same piece, same type -> run code
   assert.equal(tags.get(4), "27 L2");
   assert.equal(tags.get(5), "27");             // H1 differs by type (colour) already
-  assert.equal(tags.get(6), "002 · 31");       // same piece, two specimens -> differing part
-  assert.equal(tags.get(7), "012 · 31");
+  assert.equal(tags.get(6), "101 · 31");       // same piece, two specimens -> differing part
+  assert.equal(tags.get(7), "112 · 31");
 });

@@ -42,7 +42,7 @@
   function stemOf(p) { const b = basename(p); const i = b.lastIndexOf("."); return i < 0 ? b : b.slice(0, i); }
 
   /** Key that ignores case and separators: the raw data is not consistent about them
-   *  (ER26PB017-13+15+16-L1.clw vs ER26PB017-13+15+16L1.KLT). */
+   *  (AB24CD117-13+15+16-L1.clw vs AB24CD117-13+15+16L1.KLT). */
   function loose(s) { return s.toLowerCase().replace(/[^0-9a-z]/g, ""); }
 
   function isCurveFile(p) { const e = extOf(p); return e === ".cur" || e === ".clw"; }
@@ -140,7 +140,7 @@
 
   // ------------------------------------------------------------------ runs
   /** Run identity of a .cur/.clw path: folder + separator-blind stem + extension, so
-   *  ER26PB017-13+15+16-L1.clw and ER26PB017-13+15+16L1_Im.clw are one run. */
+   *  AB24CD117-13+15+16-L1.clw and AB24CD117-13+15+16L1_Im.clw are one run. */
   function runId(p) {
     return (dirname(p) + "\\" + loose(mainStem(p)) + extOf(p)).toLowerCase();
   }
@@ -175,7 +175,7 @@
   }
 
   const RUN_RE = /^(.+?)[- ]?([HL]\d+)$/i;
-  /** Split "ER26PB002-27H1" into specimen / piece / run label. The specimen ID leads the
+  /** Split "AB24CD101-27H1" into specimen / piece / run label. The specimen ID leads the
    *  file name (lab convention): taken from the folder name when it matches, otherwise
    *  the file name's first "-"-separated part. */
   function runLabel(stem, folderName) {
@@ -192,8 +192,8 @@
   }
 
   /** Short, unique tags for overlaid runs: the piece between specimen ID and run code
-   *  (ER26PB012-30SH1 -> "30S"). The same piece from different specimens gets the part of
-   *  the specimen ID that differs ("002 · 31", "012 · 31"); the same piece twice for one
+   *  (AB24CD112-30SH1 -> "30S"). The same piece from different specimens gets the part of
+   *  the specimen ID that differs ("101 · 31", "112 · 31"); the same piece twice for one
    *  run type (27L1, 27L2) gets the run code ("27 L1"). items: {id, spec, piece, run, kind}
    *  -> Map id -> tag. */
   function overlayTags(items) {
