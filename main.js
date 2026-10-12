@@ -124,10 +124,15 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      backgroundThrottling: !process.env.CS_SCRIPT,
     },
   });
-  if (s.maximized) win.maximize();
-  win.once("ready-to-show", () => win.show());
+  if (process.env.CS_SCRIPT) {
+    // scripted (test) runs render off-screen so they never pop up over the user's work
+    win.setBounds({ x: -20000, y: 0, width: 1440, height: 900 });
+    win.setSkipTaskbar(true);
+  } else if (s.maximized) win.maximize();
+  win.once("ready-to-show", () => (process.env.CS_SCRIPT ? win.showInactive() : win.show()));
   win.loadFile(path.join(__dirname, "src", "index.html"));
 
   const remember = () => {

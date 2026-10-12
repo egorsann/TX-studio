@@ -96,7 +96,7 @@ to write anywhere but a `*_corr` folder, so raw data can't be overwritten.
 ## Paramagnetic reference
 
 The *Paramagnetic* toggle draws the Curie–Weiss curve χ = C / (T − θ) (T in kelvin) that a
-purely paramagnetic sample would follow, scaled to the corrected χ nearest 25 °C on the
+purely paramagnetic sample would follow (violet long dashes, labelled where it is clear of the data), scaled to the corrected χ nearest 25 °C on the
 heating / warming branch (θ adjustable, default 0 K = Curie law). In the 1/χ view it is a
 straight line. Samples without magnetite or other ferromagnetic phases follow it; the
 inspector reports the largest departure (ignoring the first 8 °C of start-up transient).
@@ -110,6 +110,7 @@ npm install
 npm start               # run from source (or double-click "TX Studio.cmd")
 npm test                # parser / smoothing / pairing / correction tests
 npm run pack            # dist\TX-Studio-win32-x64.zip with installer
+node test/check_run.js <folder> <specimen prefix>   # corrections of one specimen vs stored / earlier CSVs
 ```
 
 Real-data tests run when `TX_TEST_DATA` (or a one-line `test/data-path.local`) points at a

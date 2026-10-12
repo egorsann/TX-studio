@@ -250,7 +250,7 @@ function paraFor(corr) {
 function paraCard(r) {
   const card = h("div", { class: "card" }, h("h3", {}, "Paramagnetic reference"));
   card.append(h("p", { style: "margin:0 0 10px;color:var(--text-2);font-size:12.5px" },
-    "Curie–Weiss law χ = C / (T − θ), T in kelvin, scaled to the measured χ near room temperature (grey dotted). A purely paramagnetic sample follows it; magnetite and other ferromagnetic phases depart from it."));
+    "Curie–Weiss law χ = C / (T − θ), T in kelvin, scaled to the measured χ near room temperature (violet dashed line). A purely paramagnetic sample follows it; magnetite and other ferromagnetic phases depart from it."));
   const inp = h("input", { type: "number", step: 1, value: state.s.paraTheta || 0 });
   inp.addEventListener("change", () => { saveSettings({ paraTheta: Number(inp.value) || 0 }); renderViewer(); });
   card.append(h("div", { class: "field" }, h("label", {}, "Weiss temperature θ"),
@@ -586,40 +586,61 @@ function overlayLabels(runs) {
 
 /** Pin each tag to its curve where that curve is clear of the other curves and of the
  *  tags already placed (greedy, in normalised plot coordinates). */
-function placeTags(targets, tags, theme) {
+//   obstacles: curves to keep clear of that get no tag; placed: labels already on the plot
+//   one: put a single label on whichever target has the clearest spot
+// Each candidate is the label's own box (text width x height, above or below the anchor),
+// scored by how clear it stays of every curve and of the other labels.
+function placeTags(targets, tags, theme, { obstacles = [], placed: already = [], one = false } = {}) {
   const ok = (v) => v != null && Number.isFinite(v);
-  const xsAll = targets.flatMap((t) => t.xs), ysAll = targets.flatMap((t) => t.ys).filter(ok);
+  const all = [...targets, ...obstacles];
+  const xsAll = all.flatMap((t) => t.xs), ysAll = all.flatMap((t) => t.ys).filter(ok);
   if (!xsAll.length || !ysAll.length) return [];
   const x0 = Math.min(...xsAll), xw = Math.max(...xsAll) - x0 || 1;
   const y0 = Math.min(...ysAll), yw = Math.max(...ysAll) - y0 || 1;
-  const curves = targets.map((t) => t.xs.map((x, i) => [(x - x0) / xw, ok(t.ys[i]) ? (t.ys[i] - y0) / yw : null, i]).filter((p) => p[1] != null));
-  const placed = [], out = [];
+  const sz = ($("#plot")._fullLayout || {})._size || {};
+  const PW = sz.w || 800, PH = sz.h || 600;                     // plot area in px
+  const OFF = 29 / PH;                                          // leader (20 px) + half a label
+  const half = (text) => [(String(text).replace(/<[^>]+>/g, "").length * 6.6 + 12) / 2 / PW, 11 / PH];
+  const norm = (t) => t.xs.map((x, i) => [(x - x0) / xw, ok(t.ys[i]) ? (t.ys[i] - y0) / yw : null, i]).filter((p) => p[1] != null);
+  const curves = targets.map(norm), blocks = obstacles.map(norm);
+  const placed = already.map((a) => {
+    const [hx, hy] = half(a.text || "");
+    return { x: (a.x - x0) / xw, y: (a.y - y0) / yw + (a.ay < 0 ? OFF : -OFF), hx, hy };
+  });
+  const out = [];
+  let overall = null;
+  const label = (t, best) => ({
+    x: t.xs[best.i], y: t.ys[best.i], xref: "x", yref: t.yaxis, text: t.text || tags.get(t.run.id),
+    showarrow: true, arrowhead: 0, arrowwidth: 1, arrowcolor: t.color, ax: 0, ay: best.up ? -20 : 20, standoff: 1,
+    font: { size: 11, color: t.color }, bgcolor: theme.bg, bordercolor: t.color, borderwidth: 1, borderpad: 2,
+    hovertext: t.hover || t.run.stem,
+  });
   targets.forEach((t, ti) => {
     const pts = curves[ti];
     if (pts.length < 2) return;
+    const [hx, hy] = half(t.text || tags.get(t.run.id));
+    const others = [...(one ? [] : curves.filter((_, ci) => ci !== ti)), ...blocks, pts];
     let best = null;
     for (const f of [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]) {
       const [px, py, i] = pts[Math.round(f * (pts.length - 1))];
-      const up = py < 0.82;                                       // tag above the curve unless near the top
-      const tx = px, ty = py + (up ? 0.07 : -0.07);
-      let dTag = 1;
-      for (const [qx, qy] of placed) dTag = Math.min(dTag, Math.hypot((tx - qx) * 0.8, (ty - qy) * 1.6));
-      let dCurve = 1;
-      curves.forEach((c, ci) => {
-        if (ci === ti) return;
-        for (let j = 0; j < c.length; j += 2) dCurve = Math.min(dCurve, Math.hypot(px - c[j][0], py - c[j][1]));
-      });
-      const score = Math.min(dTag, 0.14) * 5 + Math.min(dCurve, 0.08) * 6 - Math.abs(f - 0.5) * 0.04;
-      if (!best || score > best.score) best = { score, i, tx, ty, up };
+      for (const up of [true, false]) {
+        const tx = px, ty = py + (up ? OFF : -OFF);
+        if (ty + hy > 1.02 || ty - hy < -0.02) continue;
+        // < 1 means overlap: box distance in units of the boxes' half sizes
+        let dTag = 3;
+        for (const q of placed) dTag = Math.min(dTag, Math.max(Math.abs(tx - q.x) / (hx + q.hx), Math.abs(ty - q.y) / (hy + q.hy)));
+        let clear = 3;
+        for (const c of others) for (const [cx, cy] of c) clear = Math.min(clear, Math.max(Math.abs(cx - tx) / hx, Math.abs(cy - ty) / hy));
+        const score = Math.min(dTag, 2) * 2 + Math.min(clear, 2) * 3 - Math.abs(f - 0.5) * 0.3;
+        if (!best || score > best.score) best = { score, i, tx, ty, up, hx, hy };
+      }
     }
-    placed.push([best.tx, best.ty]);
-    out.push({
-      x: t.xs[best.i], y: t.ys[best.i], xref: "x", yref: t.yaxis, text: tags.get(t.run.id),
-      showarrow: true, arrowhead: 0, arrowwidth: 1, arrowcolor: t.color, ax: 0, ay: best.up ? -20 : 20, standoff: 1,
-      font: { size: 11, color: t.color }, bgcolor: theme.bg, bordercolor: t.color, borderwidth: 1, borderpad: 2,
-      hovertext: t.run.stem,
-    });
+    if (!best) return;
+    if (one) { if (!overall || best.score > overall.best.score) overall = { t, best }; return; }
+    placed.push({ x: best.tx, y: best.ty, hx, hy });
+    out.push(label(t, best));
   });
+  if (one && overall) out.push(label(overall.t, overall.best));
   return out;
 }
 
@@ -627,7 +648,7 @@ function drawPlot(runs, exportTheme) {
   const s = state.s;
   const theme = exportTheme || {
     text: cssVar("--text"), text2: cssVar("--text-2"), text3: cssVar("--text-3"), line: cssVar("--line"), line2: cssVar("--line-2"),
-    bg: cssVar("--bg"), heat: cssVar("--heat"), warm: cssVar("--warm"), cool: cssVar("--cool"), warnSoft: cssVar("--warn-soft"),
+    bg: cssVar("--bg"), heat: cssVar("--heat"), warm: cssVar("--warm"), cool: cssVar("--cool"), para: cssVar("--para"), warnSoft: cssVar("--warn-soft"),
   };
   const multi = runs.length > 1;
   const comps = s.comp === "both" ? ["in", "out"] : [s.comp];
@@ -640,7 +661,7 @@ function drawPlot(runs, exportTheme) {
   // (see overlayLabels), and the legend lists the types, not the files.
   const tags = multi ? overlayLabels(runs) : null;
   const labelComp = comps[0];
-  const tagTargets = [];
+  const tagTargets = [], paraTargets = [];
   const addTrace = (t, generic, full) => {
     t.name = generic;
     if (multi) {
@@ -718,7 +739,8 @@ function drawPlot(runs, exportTheme) {
         if (p && !p.invalid) {
           const yv = view === "norm" ? p.y.map((v) => (v == null ? null : v / p.smax)) : view === "inverse" ? p.y.map((v) => (v ? 1 / v : null)) : p.y;
           const gp = `paramagnetic (Curie–Weiss, θ = ${p.theta} K)`;
-          addTrace({ x: p.x, y: yv, type: "scatter", mode: "lines", line: { color: theme.text2, width: 1.6, dash: "dot" }, yaxis,
+          paraTargets.push({ run, color: theme.para, xs: p.x, ys: yv, yaxis, text: "paramagnetic", hover: gp });
+          addTrace({ x: p.x, y: yv, type: "scatter", mode: "lines", line: { color: theme.para, width: 2.2, dash: "longdash" }, yaxis, isPara: true,
             hovertemplate: `<b>%{fullData.name}</b><br>T = %{x:.1f} °C<br>${view === "inverse" ? "1/χ" : view === "norm" ? "χ/χmax" : "χ"} = %{y:.${view === "norm" ? 3 : view === "inverse" ? 4 : 2}f}<extra></extra>`,
             legendgroup: multi ? undefined : run.id + "para" }, gp, multi ? `${run.stem} – ${gp}` : gp);
         }
@@ -736,6 +758,11 @@ function drawPlot(runs, exportTheme) {
     }
   });
   if (multi) annotations.push(...placeTags(tagTargets, tags, theme));
+  // one "paramagnetic" label, where the line is clear of the data curves and the file tags
+  if (paraTargets.length) {
+    const curves = traces.filter((t) => !t.isPara && t.visible !== "legendonly" && (t.yaxis || "y") === "y").map((t) => ({ xs: t.x, ys: t.y }));
+    annotations.push(...placeTags(paraTargets, tags, theme, { obstacles: curves, placed: annotations.filter((a) => a.showarrow), one: true }));
+  }
 
   if (s.refs && Number.isFinite(xmin)) {
     // dotted line in the plot, a small clickable chip just above it (click = zoom there)
@@ -1280,7 +1307,7 @@ function sourcesText(base, items) {
 async function exportPng() {
   const runs = state.selected.map((id) => state.runs.get(id)).filter(Boolean);
   if (!runs.length) return;
-  const light = { text: "#1c2027", text2: "#5b6370", text3: "#8a919c", line: "#e3e6ea", line2: "#c9ced6", bg: "#ffffff", heat: "#9f1d22", warm: "#1e3a8a", cool: "#2b8cee", warnSoft: "#fff4e0" };
+  const light = { text: "#1c2027", text2: "#5b6370", text3: "#8a919c", line: "#e3e6ea", line2: "#c9ced6", bg: "#ffffff", heat: "#9f1d22", warm: "#1e3a8a", cool: "#2b8cee", para: "#7c3aed", warnSoft: "#fff4e0" };
   const fig = drawPlot(runs, light);
   const name = (runs.length === 1 ? runs[0].stem : `${runs[0].stem}+${runs.length - 1}`) + `_${state.s.view}.png`;
   const target = await api.saveDialog({ title: "Save plot", defaultPath: L.joinPath(L.outputDir(runs[0].dir), name), filters: [{ name: "PNG image", extensions: ["png"] }] });

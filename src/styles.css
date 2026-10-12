@@ -16,6 +16,7 @@
   --heat: #9f1d22;
   --warm: #1e3a8a;
   --cool: #2b8cee;
+  --para: #7c3aed;
   --ht: #c2410c;
   --ht-soft: #fdebe1;
   --lt: #0369a1;
@@ -50,6 +51,7 @@
   --heat: #e5484d;
   --warm: #5470e6;
   --cool: #5cc8ff;
+  --para: #b197fc;
   --ht: #fb923c;
   --ht-soft: #3a2316;
   --lt: #38bdf8;
@@ -216,6 +218,7 @@ button:disabled { opacity: .45; cursor: default; }
 .chip .sw { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
 .chip .sw.heat { background: var(--heat); }
 .chip .sw.cool { background: repeating-linear-gradient(90deg, var(--cool) 0 4px, transparent 4px 6px); }
+.chip .sw.para { background: repeating-linear-gradient(90deg, var(--para) 0 6px, transparent 6px 8px); }
 .chip .sw.warm { background: var(--warm); margin-left: -3px; }
 .plot-hint { color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 @media (max-width: 1250px) { .plot-hint { display: none; } }
