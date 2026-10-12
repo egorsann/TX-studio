@@ -1,7 +1,7 @@
 {
   "name": "tx-studio",
   "productName": "TX Studio",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Thermomagnetic curve viewer with automatic dry-run (empty holder) correction for KLY5/MFK .cur/.clw files",
   "main": "main.js",
   "private": true,

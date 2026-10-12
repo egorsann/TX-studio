@@ -738,7 +738,7 @@ function drawPlot(runs, exportTheme) {
         const p = paraFor(sr.corr);
         if (p && !p.invalid) {
           const yv = view === "norm" ? p.y.map((v) => (v == null ? null : v / p.smax)) : view === "inverse" ? p.y.map((v) => (v ? 1 / v : null)) : p.y;
-          const gp = `paramagnetic (Curie–Weiss, θ = ${p.theta} K)`;
+          const gp = multi ? `paramagnetic (Curie–Weiss, θ = ${p.theta} K, each run scaled to its own χ)` : `paramagnetic (Curie–Weiss, θ = ${p.theta} K)`;
           paraTargets.push({ run, color: theme.para, xs: p.x, ys: yv, yaxis, text: "paramagnetic", hover: gp });
           addTrace({ x: p.x, y: yv, type: "scatter", mode: "lines", line: { color: theme.para, width: 2.2, dash: "longdash" }, yaxis, isPara: true,
             hovertemplate: `<b>%{fullData.name}</b><br>T = %{x:.1f} °C<br>${view === "inverse" ? "1/χ" : view === "norm" ? "χ/χmax" : "χ"} = %{y:.${view === "norm" ? 3 : view === "inverse" ? 4 : 2}f}<extra></extra>`,
@@ -758,10 +758,13 @@ function drawPlot(runs, exportTheme) {
     }
   });
   if (multi) annotations.push(...placeTags(tagTargets, tags, theme));
-  // one "paramagnetic" label, where the line is clear of the data curves and the file tags
+  // label the paramagnetic line(s) where they are clear of the data curves and the file
+  // tags: one "paramagnetic" for a single run; in overlays every run has its own curve
+  // (scaled to its own chi near room temperature), so each gets "<tag> · para"
   if (paraTargets.length) {
     const curves = traces.filter((t) => !t.isPara && t.visible !== "legendonly" && (t.yaxis || "y") === "y").map((t) => ({ xs: t.x, ys: t.y }));
-    annotations.push(...placeTags(paraTargets, tags, theme, { obstacles: curves, placed: annotations.filter((a) => a.showarrow), one: true }));
+    if (multi) paraTargets.forEach((t) => { t.text = `${tags.get(t.run.id)} · para`; });
+    annotations.push(...placeTags(paraTargets, tags, theme, { obstacles: curves, placed: annotations.filter((a) => a.showarrow), one: !multi }));
   }
 
   if (s.refs && Number.isFinite(xmin)) {
