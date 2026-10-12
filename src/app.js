@@ -345,8 +345,10 @@ function emit(v, depth, out, q) {
       title: cur.node.path, onclick: () => toggleDir(cur.node.path),
       oncontextmenu: (e) => dirMenu(e, cur.node.path) });
     row.innerHTML = ICON.chev + ICON.folder;
-    const name = h("span", { class: "name" }, names[0]);
-    if (names.length > 1) name.append(h("span", { class: "meta" }, "  /  " + names.slice(1).join(" / ")));
+    // the folder that directly holds runs is bold; folders that only hold folders are not
+    const name = h("span", { class: "name" });
+    if (names.length > 1) name.append(h("span", { class: "dir-parent" }, names.slice(0, -1).join(" / ")), h("span", { class: "dir-sep" }, " / "));
+    name.append(h("span", { class: cur.files.length ? "dir-leaf has-runs" : "dir-leaf" }, names[names.length - 1]));
     row.append(name, h("span", { class: "meta" }, cur.count || ""));
     out.append(row);
     if (open) emit(cur, depth + 1, out, q);
