@@ -215,7 +215,7 @@ button:disabled { opacity: .45; cursor: default; }
 .ref-flash {
   position: absolute; width: 4px; border-radius: 2px; pointer-events: none; z-index: 4;
   background: #facc15; box-shadow: 0 0 10px 3px rgba(250, 204, 21, .75);
-  animation: ref-flash .75s ease-out forwards;
+  animation: ref-flash .25s ease-out forwards;
 }
 @keyframes ref-flash { 0%, 20% { opacity: 1; } 100% { opacity: 0; } }
 .zoombox {
