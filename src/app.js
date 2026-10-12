@@ -1,4 +1,4 @@
-/* TX Studio renderer: folder sidebar, curve viewer, automatic dry-run correction. */
+/* TX Studio renderer: folder sidebar, curve viewer, automatic empty-holder correction. */
 "use strict";
 const L = window.CurLib;
 // `api` is the global the preload bridge exposes (window.api)
@@ -44,14 +44,14 @@ const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = se
 // ====================================================================== state
 const DEFAULTS = {
   smoothN: 5, rule: "nearest", view: "corrected", comp: "in",
-  heating: true, cooling: true, markers: false, refs: true, stored: false,
+  heating: true, cooling: true, markers: false, refs: true, stored: false, para: false, paraTheta: 0,
   onlyCurves: true, showCorr: false, showIm: false, theme: "system", sideW: 300, dryOpen: true,
-  overrides: {}, dryOverrides: {}, expanded: {}, lastSel: {}, lastRoot: null,
+  overrides: {}, dryOverrides: {}, holderSmooth: {}, expanded: {}, lastSel: {}, lastRoot: null,
 };
 const state = {
   root: null, tree: null,
-  runs: new Map(),          // id -> run (everything parsed, incl. external dry runs)
-  dry: [],                  // dry runs available for pairing
+  runs: new Map(),          // id -> run (everything parsed, incl. external empty holders)
+  dry: [],                  // empty-holder runs available for pairing
   visible: [],              // run ids in sidebar order (keyboard navigation)
   selected: [], anchor: null,
   expanded: new Set(),
@@ -126,7 +126,7 @@ async function openFolder(root, { quiet = false } = {}) {
       const ov = state.s.dryOverrides[r.main];
       r.autoDry = !r.out && L.looksLikeDryRun(r, r.record);
       r.dry = ov != null ? ov : r.autoDry;
-      if (r.external && !r.dry) continue;          // outside the folder: only dry runs matter
+      if (r.external && !r.dry) continue;          // outside the folder: only empty holders matter
       state.runs.set(r.id, r);
     }
     state.dry = [...state.runs.values()].filter((r) => r.dry && !r.out)
@@ -191,11 +191,94 @@ function correctionFor(run) {
   if (run.dry) return null;
   const pair = dryFor(run);
   if (!pair) return null;
-  const n = state.s.smoothN;
-  const cin = L.correctCurve(run.curve, pair.dry.curve, n);
-  const cout = run.curveIm && pair.dry.curveIm ? L.correctCurve(run.curveIm, pair.dry.curveIm, n) : null;
-  return { pair, cin, cout };
+  const spec = smoothFor(pair.dry);
+  const cin = L.correctCurve(run.curve, pair.dry.curve, spec);
+  const cout = run.curveIm && pair.dry.curveIm ? L.correctCurve(run.curveIm, pair.dry.curveIm, spec) : null;
+  return { pair, cin, cout, spec };
 }
+
+// ====================================================================== empty-holder smoothing
+// Each empty holder is smoothed before it is subtracted: running mean over N points, the
+// smoothing stored in the file, or none. The choice is kept per holder file.
+const hasStored = (d) => L.hasStoredSmoothing(d.curve.rows);
+function storedN(d) {
+  if (d._storedN === undefined) d._storedN = L.storedSmoothingN(d.curve.rows);
+  return d._storedN;
+}
+function smoothFor(d) {
+  const saved = state.s.holderSmooth[d.main];
+  if (saved && (saved.mode !== "stored" || hasStored(d))) return saved;
+  if (!saved && hasStored(d)) return { mode: "stored", n: storedN(d) > 1 ? storedN(d) : state.s.smoothN || 5 };
+  return { mode: "smooth", n: (saved && saved.n) || state.s.smoothN || 5 };
+}
+function describeSmoothing(d, spec = smoothFor(d)) {
+  if (spec.mode === "none") return "not smoothed";
+  if (spec.mode === "stored") return storedN(d) > 1 ? `smoothing from file (running mean, ${storedN(d)} pts)` : "smoothing from file";
+  return `running mean, ${spec.n} pts`;
+}
+function setHolderSmooth(d, spec) {
+  state.s.holderSmooth[d.main] = spec;
+  persist();
+  renderViewer(); renderDryPanel(); renderStatusRight();
+}
+
+// ====================================================================== paramagnetic reference
+/** Curie-Weiss curve through the corrected chi nearest 25 deg C on the heating/warming branch,
+ *  plus how far the measured curve departs from it. */
+function paraFor(corr) {
+  const idx = corr.temp.map((_, i) => i).filter((i) => corr.segment[i] === "heating");
+  if (idx.length < 3) return null;
+  const k = idx[L.nearestIndex(idx.map((i) => corr.temp[i]), 25)];
+  const refT = corr.temp[k], refChi = corr.csusc[k], theta = state.s.paraTheta || 0;
+  if (!(refChi > 0)) return { invalid: true, refT, refChi };
+  const t0 = Math.min(...corr.temp), t1 = Math.max(...corr.temp);
+  const x = Array.from({ length: 161 }, (_, i) => t0 + ((t1 - t0) * i) / 160);
+  const y = L.curieWeiss(x, refT, refChi, theta);
+  const yp = L.curieWeiss(idx.map((i) => corr.temp[i]), refT, refChi, theta);
+  // judge the shape away from the start-up transient (first 8 deg C of the branch; the
+  // cryostat needs that to settle) and outside the empty holder's range
+  const tStart = corr.temp[idx[0]];
+  let worst = { ratio: 1, t: refT };
+  idx.forEach((i, j) => {
+    if (!yp[j] || j < 3 || Math.abs(corr.temp[i] - tStart) < 8 || (corr.outside && corr.outside[i])) return;
+    const r = corr.csusc[i] / yp[j];
+    if (Math.abs(r - 1) > Math.abs(worst.ratio - 1)) worst = { ratio: r, t: corr.temp[i] };
+  });
+  return { x, y, smax: Math.max(...corr.csusc), refT, refChi, theta, worst };
+}
+
+function paraCard(r) {
+  const card = h("div", { class: "card" }, h("h3", {}, "Paramagnetic reference"));
+  card.append(h("p", { style: "margin:0 0 10px;color:var(--text-2);font-size:12.5px" },
+    "Curie–Weiss law χ = C / (T − θ), T in kelvin, scaled to the measured χ near room temperature (grey dotted). A purely paramagnetic sample follows it; magnetite and other ferromagnetic phases depart from it."));
+  const inp = h("input", { type: "number", step: 1, value: state.s.paraTheta || 0 });
+  inp.addEventListener("change", () => { saveSettings({ paraTheta: Number(inp.value) || 0 }); renderViewer(); });
+  card.append(h("div", { class: "field" }, h("label", {}, "Weiss temperature θ"),
+    h("div", { class: "num" }, inp, h("span", { class: "delta", style: "margin-left:6px" }, "K · ≈ 0 for most paramagnetic minerals"))));
+  const res = r && !r.dry ? correctionFor(r) : null;
+  if (r && res) {
+    const p = paraFor(res.cin);
+    if (!p) return card;
+    if (p.invalid) {
+      card.append(note("warn", `χ near room temperature is ${p.refChi.toFixed(2)} (≤ 0, diamagnetic): no paramagnetic reference can be scaled to it.`));
+    } else {
+      card.append(h("dl", { class: "kv" },
+        h("dt", {}, "Scaled at"), h("dd", {}, `${p.refT.toFixed(1)} °C, χ = ${p.refChi.toFixed(2)}`)));
+      const w = p.worst;
+      if (Math.abs(w.ratio - 1) <= 0.2) {
+        card.append(note("ok", `The ${r.kind === "LT" ? "warming" : "heating"} curve stays within ±20 % of the paramagnetic curve – no clear ferromagnetic contribution.`));
+      } else {
+        const how = w.ratio <= 0 ? `χ falls to ≤ 0 at ${w.t.toFixed(0)} °C while the paramagnetic curve stays positive`
+          : `χ is ${w.ratio.toFixed(w.ratio < 10 ? 2 : 0)}× the paramagnetic curve at ${w.t.toFixed(0)} °C`;
+        card.append(note("info", `Not purely paramagnetic: ${how}. ${w.ratio > 1
+          ? "Above the curve points to a ferromagnetic contribution (e.g. magnetite) or a mineral change during heating."
+          : "Below the curve means weaker temperature dependence – a diamagnetic / temperature-independent part, or a ferromagnetic phase whose χ drops."}`));
+      }
+    }
+  }
+  return card;
+}
+
 
 // ====================================================================== sidebar
 function renderCrumb() {
@@ -291,7 +374,7 @@ function emit(v, depth, out, q) {
       nm.innerHTML = i < 0 ? esc(label) : esc(label.slice(0, i)) + "<mark>" + esc(label.slice(i, i + q.length)) + "</mark>" + esc(label.slice(i + q.length));
     } else nm.textContent = label;
     row.append(nm);
-    if (r.dry) row.append(h("span", { class: "pill dry", title: "Dry run (empty holder) – subtracted from the other runs" }, "DRY"));
+    if (r.dry) row.append(h("span", { class: "pill dry", title: `Empty-holder run – smoothed (${describeSmoothing(r)}) and subtracted from the other runs` }, "EMPTY"));
     if (r.out) row.append(h("span", { class: "pill out", title: "Exported output" }, "OUT"));
     if (r.curveIm && !f.im && !state.s.showIm) row.append(h("span", { class: "pill im", title: "Has an out-of-phase (_Im) file" }, "Im"));
     if (f.im) row.append(h("span", { class: "pill im" }, "_Im"));
@@ -313,7 +396,7 @@ function runTooltip(r) {
   const lines = [L.basename(r.main)];
   if (r.time) lines.push(`Measured ${fmtDateTime(r.time)}`);
   if (r.record && r.record.note) lines.push(`Instrument note: ${r.record.note}`);
-  if (r.dry) lines.push("Dry run – used to correct the other runs");
+  if (r.dry) lines.push(`Empty holder – ${describeSmoothing(r)}, used to correct the other runs`);
   return lines.join("\n");
 }
 
@@ -370,7 +453,8 @@ function renderDryPanel() {
     const row = h("div", { class: "row filerow", dataset: { id: d.id }, style: "padding-left:10px", title: `${d.main}\n${runTooltip(d)}` },
       h("span", { class: `pill ${d.kind === "HT" ? "ht" : "lt"}` }, d.kind),
       h("span", { class: "name" }, d.stem),
-      h("span", { class: "meta", title: `Used by ${used} run(s)` }, `${fmtShort(d.time)} · ${used}×`));
+      h("span", { class: "meta", title: `${describeSmoothing(d)} · used by ${used} run(s)` },
+        `${fmtShort(d.time)} · ${used}×${smoothFor(d).mode === "none" ? " · raw" : ""}`));
     row.addEventListener("click", (e) => clickRun(d.id, e));
     row.addEventListener("contextmenu", (e) => runMenu(e, d));
     list.append(row);
@@ -399,9 +483,9 @@ function runMenu(e, r) {
   const sel = state.selected.map((id) => state.runs.get(id));
   showMenu(e, [
     r.dry
-      ? { label: "Not a dry run", run: () => setDry(r, false) }
-      : { label: "Use as dry run", run: () => setDry(r, true), disabled: r.out },
-    ...(r.dry !== r.autoDry ? [{ label: "Reset dry-run detection", run: () => setDry(r, null) }] : []),
+      ? { label: "Not an empty holder", run: () => setDry(r, false) }
+      : { label: "Use as empty holder", run: () => setDry(r, true), disabled: r.out },
+    ...(r.dry !== r.autoDry ? [{ label: "Reset empty-holder detection", run: () => setDry(r, null) }] : []),
     "-",
     { label: sel.length > 1 ? `Export ${sel.length} corrected runs` : "Export corrected run", run: () => exportRuns(sel),
       disabled: !sel.some((x) => !x.dry && !x.out) },
@@ -443,12 +527,12 @@ function renderViewer() {
   const bits = [];
   if (one) {
     bits.push(h("span", { class: `pill ${one.kind === "HT" ? "ht" : "lt"}` }, one.kind === "HT" ? "high-T furnace" : "low-T cryostat"));
-    if (one.dry) bits.push(h("span", { class: "pill dry" }, "dry run"));
+    if (one.dry) bits.push(h("span", { class: "pill dry" }, "empty holder"));
     if (one.time) bits.push(fmtDateTime(one.time));
     bits.push(`${one.curve.rows.length} points`);
     if (!one.dry) {
       const p = dryFor(one);
-      bits.push(p ? h("span", {}, "corrected with ", h("b", {}, p.dry.stem)) : h("span", { style: "color:var(--warn)" }, "no dry run available – uncorrected"));
+      bits.push(p ? h("span", {}, "corrected with ", h("b", {}, p.dry.stem)) : h("span", { style: "color:var(--warn)" }, "no empty-holder run available – uncorrected"));
     }
   } else {
     const kinds = new Set(runs.map((r) => r.kind));
@@ -482,7 +566,7 @@ function seriesFor(run, comp, view, res) {
   const segment = L.segments(temp);
   const raw = rows.map((r) => r.tsusc);
   if (run.dry) {
-    return { temp, time, segment, y: raw, smooth: L.runningMean(raw, state.s.smoothN), dry: true };
+    return { temp, time, segment, y: raw, smooth: L.holderValues(rows, smoothFor(run)), dry: true };
   }
   const corr = res ? (comp === "out" ? res.cout : res.cin) : null;
   if (!corr) return { temp, time, segment, y: raw, uncorrected: true, raw };
@@ -590,7 +674,7 @@ function drawPlot(runs, exportTheme) {
         const full = (g) => (multi ? `${run.stem} – ${g}` : g);
         const group = multi ? undefined : run.id + seg;
         if (sr.dry || view === "raw") {
-          // the measured curve (sample or dry run) …
+          // the measured curve (sample or empty holder) …
           const ym = idx.map((i) => (sr.dry ? sr.y[i] : sr.raw[i]));
           const g1 = segName + compTag + (sr.dry ? " (measured)" : " (raw)");
           addTrace({ x: xs, y: ym, customdata: cd, type: "scatter", mode: sr.dry ? "markers" : s.markers ? "lines+markers" : "lines",
@@ -600,7 +684,7 @@ function drawPlot(runs, exportTheme) {
           const hy = sr.dry ? sr.smooth : sr.holder;
           if (hy) {
             const yh = idx.map((i) => hy[i]);
-            const g2 = (sr.dry ? `${segName} – smoothed (${s.smoothN} pts)` : `dry run – ${segName}`) + compTag;
+            const g2 = (sr.dry ? `${segName} – ${describeSmoothing(run)}` : `empty holder – ${segName}`) + compTag;
             addTrace({ x: xs, y: yh, customdata: cd, type: "scatter", mode: "lines",
               line: { color: sr.dry ? color : theme.text2, width: sr.dry ? 2.2 : 1.6, dash: sr.dry ? dash : "dot" },
               yaxis, hovertemplate: hover, legendgroup: group }, g2, full(g2));
@@ -626,15 +710,26 @@ function drawPlot(runs, exportTheme) {
             line: { color: theme.text, width: 1, dash: "dot" }, yaxis, hovertemplate: hover, legendgroup: group }, g4, full(g4));
         }
       }
-      // shade what lies outside the dry run's temperature range (held, not interpolated)
+      // paramagnetic (Curie-Weiss) reference through chi near room temperature
+      if (s.para && comp === "in" && sr.corr && view !== "raw") {
+        const p = paraFor(sr.corr);
+        if (p && !p.invalid) {
+          const yv = view === "norm" ? p.y.map((v) => (v == null ? null : v / p.smax)) : view === "inverse" ? p.y.map((v) => (v ? 1 / v : null)) : p.y;
+          const gp = `paramagnetic (Curie–Weiss, θ = ${p.theta} K)`;
+          addTrace({ x: p.x, y: yv, type: "scatter", mode: "lines", line: { color: theme.text2, width: 1.6, dash: "dot" }, yaxis,
+            hovertemplate: `<b>%{fullData.name}</b><br>T = %{x:.1f} °C<br>${view === "inverse" ? "1/χ" : view === "norm" ? "χ/χmax" : "χ"} = %{y:.${view === "norm" ? 3 : view === "inverse" ? 4 : 2}f}<extra></extra>`,
+            legendgroup: multi ? undefined : run.id + "para" }, gp, multi ? `${run.stem} – ${gp}` : gp);
+        }
+      }
+      // shade what lies outside the empty holder's temperature range (held, not interpolated)
       if (!multi && sr.corr && comp === comps[0]) {
         const st = sr.corr.stats, tmin = Math.min(...sr.temp), tmax = Math.max(...sr.temp);
         const band = (x0, x1, label) => {
           shapes.push({ type: "rect", xref: "x", yref: "paper", x0, x1, y0: 0, y1: 1, fillcolor: theme.warnSoft, opacity: 0.7, line: { width: 0 }, layer: "below" });
           annotations.push({ x: (x0 + x1) / 2, y: 0.02, xref: "x", yref: "paper", text: label, showarrow: false, font: { size: 10, color: theme.text3 }, yanchor: "bottom" });
         };
-        if (st.warm && tmax > st.holderTmax + 0.05) band(st.holderTmax, tmax, "beyond dry run");
-        if (st.cold && tmin < st.holderTmin - 0.05) band(tmin, st.holderTmin, "beyond dry run");
+        if (st.warm && tmax > st.holderTmax + 0.05) band(st.holderTmax, tmax, "beyond empty holder");
+        if (st.cold && tmin < st.holderTmin - 0.05) band(tmin, st.holderTmin, "beyond empty holder");
       }
     }
   });
@@ -818,24 +913,50 @@ function renderInspector(runs) {
   if (runs.length > 1) { ins.append(selectionCard(runs)); return; }
   const r = runs[0];
   if (r.dry) ins.append(dryCard(r)); else ins.append(correctionCard(r));
+  if (state.s.para && !r.dry) ins.append(paraCard(r));
   ins.append(runCard(r));
   if (!r.dry && !r.out) ins.append(exportCard([r]));
 }
 
-function smoothingField() {
-  const inp = h("input", { type: "number", min: 1, max: 51, step: 2, value: state.s.smoothN });
-  const set = (n) => {
-    n = Math.max(1, Math.min(51, n | 0)); if (n % 2 === 0) n += 1;
-    if (n === state.s.smoothN) { inp.value = n; return; }
-    saveSettings({ smoothN: n }); renderViewer(); renderDryPanel(); renderStatusRight();
-  };
-  inp.addEventListener("change", () => set(+inp.value));
-  return h("div", { class: "field" },
-    h("label", {}, "Dry-run smoothing (running mean)"),
-    h("div", { class: "num" },
-      h("button", { onclick: () => set(state.s.smoothN - 2), title: "Fewer points" }, "−"), inp,
-      h("button", { onclick: () => set(state.s.smoothN + 2), title: "More points" }, "+"),
-      h("span", { class: "delta", style: "margin-left:6px" }, state.s.smoothN === 5 ? "points · default" : "points")));
+/** How an empty holder is smoothed before subtraction: running mean (N points), the
+ *  smoothing stored in the file, or none. `compact` = shown on a sample's card. */
+function holderSmoothingField(d, compact) {
+  const spec = smoothFor(d), stored = hasStored(d), sn = storedN(d);
+  const box = h("div", { class: "field" }, h("label", {}, compact ? `Smoothing of ${d.stem} before subtraction` : "Smoothing before subtraction"));
+  const seg = h("div", { class: "seg seg-sm" });
+  for (const [mode, label, title] of [
+    ["smooth", "Running mean", "Smooth here with a running mean over N points"],
+    ["stored", "From file", stored ? "Use the smoothing already stored in the file" : "This file carries no stored smoothing"],
+    ["none", "None", "Subtract the measured values as they are"]]) {
+    seg.append(h("button", { class: spec.mode === mode ? "on" : null, disabled: mode === "stored" && !stored, title,
+      onclick: () => setHolderSmooth(d, { mode, n: spec.n || 5 }) }, label));
+  }
+  box.append(seg);
+  if (spec.mode === "smooth") {
+    const inp = h("input", { type: "number", min: 1, max: 51, step: 2, value: spec.n });
+    const set = (n) => {
+      n = Math.max(1, Math.min(51, n | 0)); if (n % 2 === 0) n += 1;
+      if (n === spec.n) { inp.value = n; return; }
+      setHolderSmooth(d, { mode: "smooth", n });
+    };
+    inp.addEventListener("change", () => set(+inp.value));
+    box.append(h("div", { class: "num", style: "margin-top:8px" },
+      h("button", { onclick: () => set(spec.n - 2), title: "Fewer points" }, "−"), inp,
+      h("button", { onclick: () => set(spec.n + 2), title: "More points" }, "+"),
+      h("span", { class: "delta", style: "margin-left:6px" }, spec.n === 5 ? "points · default" : "points")));
+  }
+  if (spec.mode === "none") {
+    box.append(note("warn", "Not smoothed: the empty holder's measurement noise goes straight into every corrected curve."));
+  } else if (spec.mode === "stored") {
+    box.append(note("ok", sn > 1 ? `Using the smoothing stored in the file – a running mean of ${sn} points.` : "Using the smoothing stored in the file."));
+  } else if (stored) {
+    box.append(sn === spec.n ? note("ok", "Same as the smoothing stored in the file.")
+      : note("info", `The file stores ${sn > 1 ? `a running mean of ${sn} points` : "a different smoothing"} – choose <i>From file</i> to use it.`));
+  } else {
+    box.append(note("info", "The file itself is not smoothed; it is smoothed here before it is used."));
+  }
+  if (compact) box.append(h("div", { class: "delta", style: "margin-top:6px" }, "Applies to every run corrected with this empty holder."));
+  return box;
 }
 
 function note(kind, html) {
@@ -845,16 +966,15 @@ function note(kind, html) {
 }
 
 function correctionCard(r) {
-  const card = h("div", { class: "card" }, h("h3", {}, "Dry-run correction"));
+  const card = h("div", { class: "card" }, h("h3", {}, "Empty-holder correction"));
   const cands = candidatesFor(r);
   const pair = dryFor(r);
   if (!cands.length) {
-    card.append(note("warn", `No ${r.kind === "HT" ? "high-T (.cur)" : "low-T (.clw)"} dry run found in or near this folder. ` +
-      `Put the empty-holder run in a <code>holder</code> folder next to the data, or right-click a run › <i>Use as dry run</i>.`));
-    card.append(smoothingField());
+    card.append(note("warn", `No ${r.kind === "HT" ? "high-T (.cur)" : "low-T (.clw)"} empty-holder run found in or near this folder. ` +
+      `Put it in a <code>holder</code> folder next to the data, or right-click a run › <i>Use as empty holder</i>.`));
     return card;
   }
-  // dry-run picker
+  // empty-holder picker
   const sel = h("select", {});
   const autoPick = L.pairDryRun(r.time, cands.map((c) => ({ run: c, time: c.time })), state.s.rule);
   sel.append(h("option", { value: "" }, `Automatic — ${autoPick.run.stem}`));
@@ -868,7 +988,7 @@ function correctionCard(r) {
     if (sel.value) state.s.overrides[r.main] = sel.value; else delete state.s.overrides[r.main];
     persist(); renderViewer(); renderDryPanel();
   });
-  card.append(h("div", { class: "field" }, h("label", {}, "Dry run"), sel));
+  card.append(h("div", { class: "field" }, h("label", {}, "Empty holder"), sel));
 
   const radio = h("div", { class: "radio" });
   for (const [v, label] of [["nearest", "Nearest in time"], ["preceding", "Latest before the run"]]) {
@@ -877,26 +997,26 @@ function correctionCard(r) {
     radio.append(h("label", {}, inp, label));
   }
   card.append(h("div", { class: "field" }, h("label", {}, "Automatic pairing"), radio));
-  card.append(smoothingField());
+  card.append(holderSmoothingField(pair.dry, true));
 
   const res = correctionFor(r);
   if (res) {
     const st = res.cin.stats;
     const gap = r.time != null && pair.dry.time != null ? pair.dry.time - r.time : null;
     card.append(h("dl", { class: "kv", style: "margin-top:12px" },
-      h("dt", {}, "Dry run measured"), h("dd", {}, fmtDate(pair.dry.time)),
+      h("dt", {}, "Empty holder measured"), h("dd", {}, fmtDate(pair.dry.time)),
       h("dt", {}, ""), h("dd", { class: "delta" }, gap == null ? "run date unknown" : Math.round(Math.abs(gap) / DAY) === 0 ? "same day as the run" : `${fmtDays(gap)} the run`),
-      h("dt", {}, "Dry-run T range"), h("dd", {}, `${st.holderTmin.toFixed(1)} … ${st.holderTmax.toFixed(1)} °C`),
-      h("dt", {}, "Out-of-phase"), h("dd", {}, res.cout ? "corrected" : r.curveIm ? "dry run has no _Im" : "no _Im file")));
+      h("dt", {}, "Empty holder T range"), h("dd", {}, `${st.holderTmin.toFixed(1)} … ${st.holderTmax.toFixed(1)} °C`),
+      h("dt", {}, "Out-of-phase"), h("dd", {}, res.cout ? "corrected" : r.curveIm ? "empty holder has no _Im" : "no _Im file")));
     if (gap != null && Math.abs(gap) > 30 * DAY) {
-      card.append(note("warn", `The dry run was measured ${fmtDays(gap)} this run — the holder signal drifts, a closer dry run would be better.`));
+      card.append(note("warn", `The empty holder was measured ${fmtDays(gap)} this run — the holder signal drifts, a closer empty-holder run would be better.`));
     }
     if (st.cold || st.warm) {
       const pts = (n) => `${n} point${n === 1 ? "" : "s"}`;
       const parts = [];
       if (st.warm) parts.push(`${pts(st.warm)} warmer than ${st.holderTmax.toFixed(1)} °C`);
       if (st.cold) parts.push(`${pts(st.cold)} colder than ${st.holderTmin.toFixed(1)} °C`);
-      card.append(note("warn", `${parts.join(" and ")} — outside the dry run's range. The dry run's end value is used there (shaded in the plot).`));
+      card.append(note("warn", `${parts.join(" and ")} — outside the empty holder's range. Its end value is used there (shaded in the plot).`));
     }
     const cmp = st.compare;
     if (cmp) {
@@ -914,20 +1034,12 @@ function correctionCard(r) {
 
 function dryCard(r) {
   const used = samples().filter((x) => { const p = dryFor(x); return p && p.dry.id === r.id; });
-  const card = h("div", { class: "card" }, h("h3", {}, h("span", { class: "grow" }, "Dry run"), h("span", { class: "pill dry" }, r.autoDry ? "auto-detected" : "marked by you")));
+  const card = h("div", { class: "card" }, h("h3", {}, h("span", { class: "grow" }, "Empty holder"), h("span", { class: "pill dry" }, r.autoDry ? "auto-detected" : "marked by you")));
   card.append(h("p", { style: "margin:0 0 10px;color:var(--text-2)" },
-    `Empty ${r.kind === "HT" ? "furnace" : "cryostat"} measurement. Its running mean (thick line) is subtracted from ${r.kind === "HT" ? "high-T" : "low-T"} runs.`));
-  card.append(smoothingField());
-  const stored = r.curve.rows.some((x) => Math.abs(x.csusc) > 5e-3);
-  if (stored) {
-    const sm = L.runningMean(r.curve.rows.map((x) => x.tsusc), state.s.smoothN);
-    const d = Math.max(...sm.map((v, i) => Math.abs(v - r.curve.rows[i].csusc)));
-    card.append(d < 0.006
-      ? note("ok", `Identical to the smoothing stored in this file.`)
-      : note("info", `The file stores a different smoothing (max |Δ| ${d.toFixed(2)}); this app recomputes it from the raw values.`));
-  }
+    `Empty ${r.kind === "HT" ? "furnace" : "cryostat"} measurement. It is smoothed (thick line) and then subtracted from ${r.kind === "HT" ? "high-T" : "low-T"} runs.`));
+  card.append(holderSmoothingField(r, false));
   const list = h("div", { class: "legend-list", style: "margin-top:10px" });
-  list.append(h("div", { class: "delta" }, used.length ? `Corrects ${used.length} run${used.length === 1 ? "" : "s"}:` : "Not the closest dry run for any run in this folder."));
+  list.append(h("div", { class: "delta" }, used.length ? `Corrects ${used.length} run${used.length === 1 ? "" : "s"}:` : "Not the closest empty holder for any run in this folder."));
   for (const u of used.slice(0, 12)) list.append(h("a", { class: "link", onclick: () => select([u.id], { scroll: true }) }, u.stem));
   if (used.length > 12) list.append(h("span", { class: "delta" }, `… and ${used.length - 12} more`));
   card.append(list);
@@ -982,18 +1094,18 @@ function selectionCard(runs) {
     list.append(h("div", { class: "li" },
       h("span", { class: "run-tag", style: `color:${color};border-color:${color}` }, tags.get(r.id)),
       h("a", { class: "link", onclick: () => select([r.id], { scroll: true }) }, r.stem),
-      h("span", { class: "meta" }, r.dry ? "dry run" : p ? `− ${p.dry.stem}` : "uncorrected")));
+      h("span", { class: "meta" }, r.dry ? "empty holder" : p ? `− ${p.dry.stem}` : "uncorrected")));
   });
   card.append(list);
   card.append(h("p", { class: "delta", style: "margin:10px 0 0" },
     "Colours show the run type (heating dark red, warming dark blue, cooling dashed blue); the tags on the curves name the file. Click a name to open it alone."));
   const frag = document.createDocumentFragment();
-  frag.append(card, smoothingWrap());
+  frag.append(card);
+  if (state.s.para) frag.append(paraCard(null));
   const exp = runs.filter((r) => !r.dry && !r.out);
   if (exp.length) frag.append(exportCard(exp));
   return frag;
 }
-function smoothingWrap() { const c = h("div", { class: "card" }, h("h3", {}, "Dry-run smoothing")); c.append(smoothingField()); return c; }
 
 async function openOrReveal(dir) {
   if (await api.exists(dir)) api.openPath(dir); else toast("Nothing exported there yet");
@@ -1072,7 +1184,7 @@ async function exportRuns(runs, { confirmed = false } = {}) {
     const outs = [...groups.keys()];
     setStatus(`Exported ${runs.length - skipped.length} run(s), ${files} files`);
     toast(`Exported ${runs.length - skipped.length} run${runs.length - skipped.length === 1 ? "" : "s"} → ${outs.length === 1 ? L.basename(outs[0]) : `${outs.length} folders`}` +
-      (skipped.length ? ` · ${skipped.length} skipped (no dry run)` : ""),
+      (skipped.length ? ` · ${skipped.length} skipped (no empty holder)` : ""),
       outs.length ? { label: "Open folder", run: () => api.openPath(outs[0]) } : null);
   } catch (err) {
     console.error(err);
@@ -1102,20 +1214,22 @@ function confirmDialog(title, body, paths, okLabel) {
 function sourcesText(base, items) {
   const pad = (s, n) => String(s).padEnd(n);
   const lines = [
-    `${base} – dry-run correction (TX Studio, ${new Date().toISOString().slice(0, 16).replace("T", " ")})`,
-    `smoothing: ${state.s.smoothN}-point running mean of the dry run · pairing: ${state.s.rule === "nearest" ? "nearest in time" : "latest before the run"}`,
-    `CSUSC = TSUSC − smoothed dry run at the same temperature (heating / cooling branches separate); NSUSC = CSUSC / max(CSUSC)`,
-    "-".repeat(110),
-    pad("run", 26) + pad("dry run", 22) + pad("run date", 12) + pad("dry date", 12) + pad("gap", 8) + pad("Im", 5) + "notes",
+    `${base} – empty-holder correction (TX Studio, ${new Date().toISOString().slice(0, 16).replace("T", " ")})`,
+    `pairing: ${state.s.rule === "nearest" ? "nearest in time" : "latest before the run"}`,
+    `CSUSC = TSUSC − smoothed empty holder at the same temperature (heating / cooling branches separate); NSUSC = CSUSC / max(CSUSC)`,
+    "-".repeat(126),
+    pad("run", 26) + pad("empty holder", 22) + pad("smoothing", 16) + pad("run date", 12) + pad("holder date", 12) + pad("gap", 8) + pad("Im", 5) + "notes",
   ];
   for (const { r, res } of items) {
     const st = res.cin.stats, d = res.pair.dry;
     const gap = r.time != null && d.time != null ? `${Math.round((d.time - r.time) / DAY)}d` : "?";
     const notes = [];
-    if (!res.pair.auto) notes.push("dry run chosen by hand");
-    if (st.cold || st.warm) notes.push(`${st.cold + st.warm} pts outside dry-run T range (${st.cold} cold, ${st.warm} warm), held`);
+    if (!res.pair.auto) notes.push("empty holder chosen by hand");
+    if (st.cold || st.warm) notes.push(`${st.cold + st.warm} pts outside empty-holder T range (${st.cold} cold, ${st.warm} warm), held`);
     if (st.compare) notes.push(st.compare.mean < 0.1 ? `matches stored correction (${st.compare.mean.toFixed(3)} mean)` : `replaces stored correction (off by ${st.compare.mean.toFixed(2)} mean)`);
-    lines.push(pad(r.stem, 26) + pad(d.stem, 22) + pad(isoDate(r.time), 12) + pad(isoDate(d.time), 12) + pad(gap, 8) + pad(res.cout ? "yes" : "-", 5) + notes.join("; "));
+    const sp = res.spec || smoothFor(d);
+    const smooth = sp.mode === "none" ? "none" : sp.mode === "stored" ? (storedN(d) > 1 ? `file (mean ${storedN(d)})` : "file") : `mean ${sp.n}`;
+    lines.push(pad(r.stem, 26) + pad(d.stem, 22) + pad(smooth, 16) + pad(isoDate(r.time), 12) + pad(isoDate(d.time), 12) + pad(gap, 8) + pad(res.cout ? "yes" : "-", 5) + notes.join("; "));
   }
   return lines.join("\r\n") + "\r\n";
 }
@@ -1138,7 +1252,7 @@ function setStatus(x) { const s = $("#status"); s.innerHTML = ""; s.append(x); }
 function renderStatusRight() {
   const n = samples().length;
   $("#statusRight").textContent = state.root
-    ? `${n} run${n === 1 ? "" : "s"} · ${state.dry.length} dry run${state.dry.length === 1 ? "" : "s"} · smoothing ${state.s.smoothN} pts · ${state.s.rule === "nearest" ? "nearest dry run" : "preceding dry run"}`
+    ? `${n} run${n === 1 ? "" : "s"} · ${state.dry.length} empty holder${state.dry.length === 1 ? "" : "s"} · ${state.s.rule === "nearest" ? "nearest empty holder" : "latest empty holder before the run"}`
     : "";
 }
 let toastTimer = null;
@@ -1265,7 +1379,7 @@ function wire() {
 (async function init() {
   const saved = await api.getSettings();
   state.s = { ...DEFAULTS, ...saved };
-  for (const k of ["overrides", "dryOverrides", "expanded", "lastSel"]) state.s[k] = { ...(saved[k] || {}) };
+  for (const k of ["overrides", "dryOverrides", "holderSmooth", "expanded", "lastSel"]) state.s[k] = { ...(saved[k] || {}) };
   document.documentElement.style.setProperty("--side-w", (state.s.sideW || 300) + "px");
   wire();
   applyTheme();

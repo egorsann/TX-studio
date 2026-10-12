@@ -199,6 +199,7 @@ button:disabled { opacity: .45; cursor: default; }
 .seg { display: inline-flex; background: var(--bg-3); border-radius: 7px; padding: 2px; }
 .seg button { border: 0; background: transparent; padding: 4px 10px; border-radius: 5px; color: var(--text-2); white-space: nowrap; }
 .seg button:hover:not(:disabled) { color: var(--text); }
+.seg.seg-sm button { padding: 3px 9px; font-size: 12px; }
 .seg button.on { background: var(--bg); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); font-weight: 600; }
 .chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .chip {

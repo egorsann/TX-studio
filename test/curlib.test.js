@@ -26,6 +26,27 @@ test("running mean: edge points copied from the nearest full window", () => {
   assert.deepEqual(L.runningMean([1, 2], 5), [1.5, 1.5]);
 });
 
+test("empty-holder smoothing modes", () => {
+  const rows = [1, 2, 3, 4, 5, 6, 7].map((v, i) => ({ temp: i, tsusc: v, csusc: 0 }));
+  assert.deepEqual(L.holderValues(rows, { mode: "none" }), [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(L.holderValues(rows, { mode: "smooth", n: 5 }), [3, 3, 3, 4, 5, 5, 5]);
+  assert.deepEqual(L.holderValues(rows, 5), [3, 3, 3, 4, 5, 5, 5]);
+  assert.deepEqual(L.holderValues(rows, { mode: "stored", n: 3 }), L.runningMean([1, 2, 3, 4, 5, 6, 7], 3));  // nothing stored
+  assert.equal(L.storedSmoothingN(rows), 0);
+  const sm = L.runningMean(rows.map((r) => r.tsusc), 3);
+  rows.forEach((r, i) => { r.csusc = sm[i]; });
+  assert.equal(L.storedSmoothingN(rows), 3);
+  assert.deepEqual(L.holderValues(rows, { mode: "stored" }), sm);
+});
+
+test("Curie-Weiss reference passes through the reference point", () => {
+  const y = L.curieWeiss([25, -196.15, 726.85], 25, 10, 0);
+  assert.ok(Math.abs(y[0] - 10) < 1e-9);
+  assert.ok(Math.abs(y[1] - 10 * 298.15 / 77) < 1e-9);        // 77 K: ~3.9x
+  assert.ok(Math.abs(y[2] - 10 * 298.15 / 1000) < 1e-9);
+  assert.equal(L.nearestIndex([-190, -50, 0.3], 25), 2);
+});
+
 test("fixed-width parse copes with touching columns", () => {
   const txt = "  TEMP    TSUSC     CSUSC NSUSC       BULKS    FERRT    FERRB   TIMERHOTSTUFF\n" +
               "  26.6    -43.7     -0.66-0.019         0.0      0.0      0.0      0      0.0\n";

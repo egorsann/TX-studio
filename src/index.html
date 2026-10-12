@@ -55,7 +55,7 @@
       <section class="dry-panel" id="dryPanel">
         <button class="dry-head" id="dryHead">
           <svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
-          <span>Dry runs</span>
+          <span>Empty holders</span>
           <span class="count" id="dryCount">0</span>
         </button>
         <div class="dry-list" id="dryList"></div>
@@ -72,8 +72,8 @@
             <path d="M6 54c10 0 12-20 22-20s9 10 15 10 9-14 15-18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".35"/>
           </svg>
           <h1>Open a folder of runs</h1>
-          <p>Point it at a folder with <code>.cur</code> / <code>.clw</code> files. Dry runs (empty
-            holder / furnace / cryostat) are found automatically and subtracted from every run.</p>
+          <p>Point it at a folder with <code>.cur</code> / <code>.clw</code> files. Empty-holder runs
+            (empty furnace / cryostat) are found automatically, smoothed and subtracted from every run.</p>
           <button class="primary" id="btnOpenBig">Open folder…</button>
           <p class="hint">or drop a folder anywhere on this window</p>
         </div>
@@ -89,7 +89,7 @@
         <div class="toolbar">
           <div class="seg" id="segView" role="tablist">
             <button data-v="corrected" class="on">Corrected</button>
-            <button data-v="raw">Raw vs dry run</button>
+            <button data-v="raw">Raw vs empty holder</button>
             <button data-v="norm">Normalized</button>
             <button data-v="inverse" title="1/χ – for Curie point estimates">1/χ</button>
           </div>
@@ -102,6 +102,7 @@
             <button class="chip on" data-t="heating" title="Heating (high-T, dark red) and warming (low-T, dark blue) branches"><i class="sw heat"></i><i class="sw warm"></i>Heating / warming</button>
             <button class="chip on" data-t="cooling" title="Cooling after heating (dashed)"><i class="sw cool"></i>Cooling</button>
             <button class="chip" data-t="markers">Points</button>
+            <button class="chip" data-t="para" title="Curie–Weiss curve a purely paramagnetic sample would follow (scaled to χ near room temperature)">Paramagnetic</button>
             <button class="chip on" data-t="refs" title="Pyrrhotite, magnetite, hematite / Verwey, Morin">Transitions</button>
             <button class="chip" data-t="stored" id="chipStored" title="Overlay the correction already stored in the file">Stored correction</button>
           </div>

@@ -1,10 +1,10 @@
 /*
- * curlib.js -- file parsing and dry-run (empty holder) correction for KLY5 / MFK
+ * curlib.js -- file parsing and empty-holder correction for KLY5 / MFK
  * thermomagnetic runs (.cur = high-T furnace, .clw = low-T cryostat).
  *
  * The empty-holder correction:
  *
- *   holder   = running mean of the dry run's TSUSC, N points (default 5),
+ *   holder   = the empty holder's TSUSC smoothed (running mean, N points, default 5),
  *              first/last N/2 points copied from the nearest full window, rounded 0.01
  *              -- bit-exact against every smoothed holder file tested
  *   CSUSC(i) = TSUSC(i) - holder(T(i))      heating and cooling branches kept separate,
@@ -166,7 +166,7 @@
   const DRY_NAME_RE = /hotstuff|freez|frosty|empty|dry[ _-]?run|blank/i;
   const DRY_DIR_RE = /holder|empty|dry[ _-]?run|blank/i;
 
-  /** A dry run (empty holder / furnace / cryostat measurement)? The instrument record
+  /** An empty-holder run (empty furnace / cryostat measurement)? The instrument record
    *  says so in its Note column ("EMPTY"); the names are a fallback. */
   function looksLikeDryRun(run, record) {
     if (record && /^empty$/i.test((record.note || "").trim())) return true;
@@ -237,6 +237,45 @@
     return out.map((v) => round(v, 2));
   }
 
+  /** What gets subtracted: the empty holder's TSUSC, smoothed per `spec` --
+   *  {mode: "smooth", n} running mean over n points (a bare number means the same),
+   *  {mode: "stored"} the smoothing already stored in the file's CSUSC column (running
+   *  mean of n when the file has none), {mode: "none"} the measured values as they are. */
+  function holderValues(rows, spec) {
+    if (spec == null || typeof spec === "number") spec = { mode: "smooth", n: spec || 5 };
+    const ts = rows.map((r) => r.tsusc);
+    if (spec.mode === "none") return ts;
+    if (spec.mode === "stored" && hasStoredSmoothing(rows)) return rows.map((r) => r.csusc);
+    return runningMean(ts, spec.n || 5);
+  }
+
+  function hasStoredSmoothing(rows) { return rows.some((r) => Math.abs(r.csusc) > 5e-3); }
+
+  /** Width of the running mean that reproduces the file's stored smoothing, or 0. */
+  function storedSmoothingN(rows) {
+    if (!hasStoredSmoothing(rows)) return 0;
+    const ts = rows.map((r) => r.tsusc);
+    for (let n = 1; n <= 31; n += 2) {
+      const sm = runningMean(ts, n);
+      if (sm.every((v, i) => Math.abs(v - rows[i].csusc) < 0.006)) return n;
+    }
+    return 0;
+  }
+
+  /** Paramagnetic reference (Curie-Weiss law): chi(T) = C / (T - theta), T in kelvin,
+   *  with C chosen so the curve passes through refChi at refT (deg C). null where T <= theta. */
+  function curieWeiss(temps, refT, refChi, thetaK) {
+    const K = 273.15, c = refChi * (refT + K - thetaK);
+    return temps.map((t) => (t + K - thetaK > 0.5 ? c / (t + K - thetaK) : null));
+  }
+
+  /** Index of the value nearest to target. */
+  function nearestIndex(values, target) {
+    let k = 0;
+    for (let i = 1; i < values.length; i++) if (Math.abs(values[i] - target) < Math.abs(values[k] - target)) k = i;
+    return k;
+  }
+
   function round(v, d) { const f = Math.pow(10, d); return Math.round(v * f + (v >= 0 ? 1e-9 : -1e-9)) / f; }
 
   function argmax(a) { let k = 0; for (let i = 1; i < a.length; i++) if (a[i] > a[k]) k = i; return k; }
@@ -262,7 +301,7 @@
     };
   }
 
-  /** Dry-run lookup for one branch: below the branch's first point / beyond its last
+  /** Empty-holder lookup for one branch: below the branch's first point / beyond its last
    *  point the end value is used; otherwise the FIRST pair in measurement order that
    *  brackets T (rising pairs when heating, falling pairs when cooling) is interpolated
    *  linearly. Single precision throughout, matching the values stored in the files. */
@@ -288,9 +327,9 @@
   /** The smoothed holder trace evaluated at the sample's temperatures, heating and
    *  cooling branches kept separate (the furnace/cryostat behaves differently on the
    *  way up and down). */
-  function holderTrace(holderRows, sampleTemps, smoothN) {
+  function holderTrace(holderRows, sampleTemps, smooth) {
     const hT = holderRows.map((r) => r.temp);
-    const hS = runningMean(holderRows.map((r) => r.tsusc), smoothN);
+    const hS = holderValues(holderRows, smooth);
     const hk = argmax(hT), sk = argmax(sampleTemps);
     const heat = branchLookup(hT.slice(0, hk + 1), hS.slice(0, hk + 1), true);
     const coolT = hT.slice(hk + 1), coolS = hS.slice(hk + 1);
@@ -302,15 +341,15 @@
   }
 
   /**
-   * Correct one curve against one dry run.
+   * Correct one curve against one empty-holder run. `smooth`: see holderValues.
    * @returns {{temp,time,tsusc,holder,csusc,nsusc,segment,outside,stored,stats}}
    */
-  function correctCurve(sample, holder, smoothN) {
+  function correctCurve(sample, holder, smooth) {
     const rows = sample.rows;
     const temp = rows.map((r) => r.temp);
     const time = rows.map((r) => r.time);
     const tsusc = rows.map((r) => r.tsusc);
-    const h = holderTrace(holder.rows, temp, smoothN);
+    const h = holderTrace(holder.rows, temp, smooth);
     const csusc = tsusc.map((v, i) => round(Math.fround(Math.fround(v) - h.trace[i]), 2));
     const smax = Math.max(...csusc);
     const nsusc = csusc.map((v) => (smax ? round(v / smax, 3) : 0));
@@ -402,7 +441,8 @@
     COL, REF_LINES,
     basename, dirname, joinPath, extOf, stemOf, loose, isCurveFile, isRecordFile, kindOf, isIm, mainStem,
     parseCurve, parseRecord, findRecordPath, runId, groupRuns, looksLikeDryRun, runLabel, overlayTags,
-    runningMean, segments, holderTrace, correctCurve, pairDryRun,
+    runningMean, holderValues, hasStoredSmoothing, storedSmoothingN, curieWeiss, nearestIndex,
+    segments, holderTrace, correctCurve, pairDryRun,
     writeCurve, runCsv, outputDir, round,
   };
 });
