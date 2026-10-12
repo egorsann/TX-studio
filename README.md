@@ -4,6 +4,11 @@ A desktop viewer for thermomagnetic (temperature–susceptibility, "TX") runs me
 KLY5 / MFK Kappabridges with a furnace or cryostat: browse a folder of `.cur` / `.clw`
 runs, look at the curves, and correct every run for the empty holder automatically.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-dark.png">
+  <img src="docs/screenshots/overview-light.png" alt="TX Studio: folder sidebar, a corrected heating / cooling run with transition labels, and the empty-holder correction card">
+</picture>
+
 ## Install on a Windows PC
 
 1. Download **[TX-Studio-win32-x64.zip](https://github.com/egorsann/TX-studio/releases/latest/download/TX-Studio-win32-x64.zip)**
@@ -22,67 +27,101 @@ That's it: TX Studio is copied to `%LOCALAPPDATA%\Programs\TX Studio`, gets a
 * Don't want to install? Double-click `TX Studio.exe` in the unzipped folder instead.
 * Settings (last folder, choices) are kept per user in `%APPDATA%\TX Studio`.
 
-## Using it
+## Features
 
-* Open a folder (button, `Ctrl+O`, or drop a folder / a `.cur` file on the window).
-  The last folder is reopened next time.
-* Pick runs in the sidebar; ↑/↓ flips through them, Ctrl/Shift-click overlays several.
-* **Plot:** right-drag = zoom box (a flat box zooms temperature only, a narrow one χ only),
-  left- or middle-drag = pan, mouse wheel = zoom, double-click or Esc = full curve.
-  Heating is dark red, low-T warming dark blue, cooling a dashed brighter blue.
-* **Paramagnetic** toggle: the Curie–Weiss curve a purely paramagnetic sample would follow
-  (see below).
-* **Transitions** (Po, Mag, Hem / T<sub>V</sub>, T<sub>M</sub>) sit as small labels above the
-  plot; click one to zoom onto the data at that temperature (its line flashes yellow).
-* **Overlays** keep the run-type colours; every curve gets a small tag in its own colour
-  naming the file by the part between specimen ID and run code (`AB24CD112-30SH1` → `30S`).
-  Tags are made unique only where needed (`27 L1` / `27 L2`, `101 · 31` / `112 · 31`).
-* **Export** (`Ctrl+E` this run, `Ctrl+Shift+E` / *Export all*) writes the corrected files.
+### Folder view
+
+<img src="docs/screenshots/sidebar.png" align="right" width="270" alt="Sidebar: runs grouped per specimen piece, empty holders panel">
+
+Open a folder (button, `Ctrl+O`, or drop a folder / a `.cur` file on the window) and the
+sidebar shows its thermomagnetic runs — `HT` = high-T furnace (`.cur`), `LT` = low-T
+cryostat (`.clw`) — with the measurement date from the instrument record (`.KHT`/`.KLT`).
+
+* An `_Im` (out-of-phase) file is merged into its run (`Im` badge).
+* Files stay in alphabetical order; the runs of one piece (`27H1`, `27L1`, `27L2`) share a
+  faint background band, like Finder's row stripes.
+* The folder that holds the runs is bold; single-child folders are compacted
+  (`AB24CD101_TX / AB24CD101_TX_raw`); exported `_corr` folders are hidden (filter menu).
+* ↑/↓ flips through runs, Ctrl/Shift-click overlays several, type to filter.
+* The **Empty holders** panel lists every empty-holder run found, how many runs each
+  corrects, and the last folder is reopened next time.
 
 File names are expected to start with the specimen ID and end with the run code
-(`H1`, `L1`, `L2`, …), e.g. `AB24CD101-27H1.cur`, `AB24CD101-27L1.clw`.
+(`H1`, `L1`, `L2`, …), e.g. `AB24CD101-27H1.cur`.
 
-### The three parts
+<br clear="right">
 
-**Sidebar.** The folder tree, reduced to thermomagnetic runs (`.cur` = high-T furnace,
-`.clw` = low-T cryostat). An `_Im` (out-of-phase) file is merged into its run (`Im` badge),
-the instrument record (`.KHT`/`.KLT`) supplies the date. Single-child folders are compacted
-(`AB24CD101_TX / AB24CD101_TX_raw`), exported `_corr` folders are hidden (filter menu).
-Files stay in alphabetical order; runs of the same piece (`27H1`, `27L1`, `27L2`) share a
-faint background band, alternating per group like Finder's row stripes.
-The **Empty holders** panel at the bottom lists every empty-holder run that was found.
+### Automatic empty-holder correction
 
-**Curve viewer.** Corrected χ(T), *Raw vs empty holder* (what is being subtracted),
-normalised, and 1/χ. In-phase, out-of-phase, or both (out-of-phase on the right axis).
-Toggles for points and transition lines, and an overlay of a correction already stored in
-the file. *PNG* saves a white-background figure. Temperatures outside the empty holder's
-range are shaded.
+![Raw run, the empty holder that is subtracted from it, and the expanded correction card](docs/screenshots/empty-holder-correction.png)
 
-**Automatic empty-holder correction.** No manual "smooth the empty curve, open it, subtract":
+No manual "smooth the empty curve, open it, subtract":
 
 1. Empty-holder runs are recognised by the instrument record (`Note = EMPTY`), by name
    (`*HOTSTUFF*`, `*FREEZ*`, `*FROSTY*`, `empty`, `dry run`), or by sitting in a `*holder*`
    folder. The opened folder *and up to three levels above it* are searched, so opening a
    single specimen still finds `holder_corrections/`. Right-click any run to mark/unmark it.
 2. Each run is paired with the empty-holder run of the same kind measured **nearest in time**
-   (or the latest one before it). Override per run in the inspector.
-3. The empty holder is smoothed and subtracted (below).
+   (or the latest one before it), or one you pick.
+3. The empty holder is smoothed and subtracted (see *The correction* below). *Raw vs empty
+   holder* shows what is subtracted.
 
-**Export** writes, next to the raw folder (`X_raw/` → `X_corr/`, otherwise
-`<folder>/<folder>_corr/`): corrected `.cur`/`.clw` (+ `_Im`) in the original format,
-a CSV per run (`piece, run, mode, temp_C, time_s, segment, chi_in_1e6SI, chi_in_norm,
-chi_out_1e6SI, chi_raw_1e6SI, holder_1e6SI`), a combined CSV and a `_sources.txt` noting
-which empty holder (and smoothing) corrected what. The app asks before replacing existing files, and refuses
-to write anywhere but a `*_corr` folder, so raw data can't be overwritten.
+The correction card stays collapsed to one line — holder · time gap · smoothing — with a
+green check, or an amber mark when something needs a look (no holder, holder more than
+30 days away, many points outside its temperature range, no smoothing).
+
+![Empty-holder run with the smoothing choice: running mean, from file, or none](docs/screenshots/empty-holder-smoothing.png)
+
+Select an empty-holder run to choose how it is smoothed before it is used: a **running
+mean** over N points, the smoothing already stored in the file (**From file**), or
+**None**. The plot previews it; the choice applies to every run corrected with that holder.
+
+### Transition labels: click to zoom
+
+![Clicking "Mag" zooms onto the 580 °C magnetite Curie point and flashes its line yellow](docs/screenshots/transition-zoom.png)
+
+Po, Mag, Hem (pyrrhotite, magnetite, hematite) for high-T runs and T<sub>V</sub>, T<sub>M</sub>
+(Verwey, Morin) for low-T runs sit as small labels above the plot. Click one to zoom onto the
+data at that temperature — its line flashes yellow; double-click or Esc returns to the full curve.
+
+**Mouse:** right-drag = zoom box (a flat box zooms temperature only, a narrow one χ only),
+left- or middle-drag = pan, wheel = zoom. Views: corrected, raw vs empty holder,
+normalised, 1/χ — in-phase, out-of-phase or both. Heating is dark red, low-T warming dark
+blue, cooling a dashed brighter blue. *PNG* saves a white-background figure.
+
+### Overlays
+
+![Four high-T runs overlaid, each curve tagged with its piece](docs/screenshots/overlay-tags.png)
+
+Overlaid runs keep the run-type colours; every curve gets a small tag in its own colour
+naming the file by the part between specimen ID and run code (`AB24CD112-30SH1` → `30S`),
+made unique only where needed (`27 L1` / `27 L2`, `101 · 31` / `112 · 31`).
+
+### Paramagnetic reference
+
+![Low-T run with the Curie–Weiss reference curve and the inspector's verdict](docs/screenshots/paramagnetic.png)
+
+The *Paramagnetic* toggle draws the Curie–Weiss curve χ = C / (T − θ) (T in kelvin) that a
+purely paramagnetic sample would follow, scaled to the corrected χ nearest 25 °C
+(θ adjustable, default 0 K = Curie law; a straight line in the 1/χ view). Samples without
+magnetite or other ferromagnetic phases follow it; the inspector reports the largest
+departure. In overlays each run has its own curve, labelled with its tag.
+
+### Export
+
+`Ctrl+E` (this run), `Ctrl+Shift+E` / *Export all* write, next to the raw folder
+(`X_raw/` → `X_corr/`, otherwise `<folder>/<folder>_corr/`): corrected `.cur`/`.clw`
+(+ `_Im`) in the original format, a CSV per run (`piece, run, mode, temp_C, time_s, segment,
+chi_in_1e6SI, chi_in_norm, chi_out_1e6SI, chi_raw_1e6SI, holder_1e6SI`), a combined CSV and
+a `_sources.txt` noting which empty holder (and smoothing) corrected what. The app asks
+before replacing existing files and refuses to write anywhere but a `*_corr` folder, so
+raw data can't be overwritten.
 
 ## The correction
 
-* **Smoothing** — before it is used, each empty holder is smoothed; select it to choose how:
-  a centred *running mean* over N points (default 5; the first/last N/2 points copied from
-  the nearest full window, rounded to 0.01), *From file* (the smoothing already stored in
-  the file's CSUSC column — the default when the file has one), or *None* (warned against).
-  The plot previews it, the choice is remembered per empty-holder file and applies to every
-  run corrected with it; the same control sits on each run's correction card.
+* **Smoothing** — a centred *running mean* over N points (default 5; the first/last N/2
+  points copied from the nearest full window, rounded to 0.01), the smoothing stored in the
+  file's CSUSC column (the default when the file has one), or none (warned against).
 * **Subtraction** — sample and empty holder are split into heating / cooling at their
   temperature maximum. For each sample point the smoothed empty holder is looked up on the
   same branch: below the branch's first point or beyond its last point the end value is
@@ -92,14 +131,6 @@ to write anywhere but a `*_corr` folder, so raw data can't be overwritten.
 * **Normalisation** — `NSUSC = CSUSC / max(CSUSC)` (signed maximum).
 * The written `.cur`/`.clw` keeps every other column as it was, zeroes BULKS (it derives
   from the old CSUSC) and puts the empty holder's name in the header's EMPTY field.
-
-## Paramagnetic reference
-
-The *Paramagnetic* toggle draws the Curie–Weiss curve χ = C / (T − θ) (T in kelvin) that a
-purely paramagnetic sample would follow (violet long dashes, labelled where it is clear of the data), scaled to the corrected χ nearest 25 °C on the
-heating / warming branch (θ adjustable, default 0 K = Curie law). In the 1/χ view it is a
-straight line. Samples without magnetite or other ferromagnetic phases follow it; the
-inspector reports the largest departure (ignoring the first 8 °C of start-up transient).
 
 ## Development
 
@@ -118,7 +149,8 @@ folder with `holder_corrections/` and `<SPEC>_TX/<SPEC>_TX_raw/` runs.
 
 `src/lib/curlib.js` holds all file handling and correction maths (no Electron
 dependency); `src/app.js` is the UI; `main.js` the window and file access;
-`scripts/` the packaging and installer.
+`scripts/` the packaging and installer. Screenshots in `docs/screenshots` use made-up
+specimen IDs.
 
 To publish a new version: bump `version` in `package.json`, `npm run pack`, then
 `gh release create vX.Y.Z dist/TX-Studio-win32-x64.zip`.
