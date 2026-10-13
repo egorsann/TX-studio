@@ -97,11 +97,12 @@ async function listCurveFiles(dir) {
 }
 
 // ------------------------------------------------------------------ writing guard
-/** Output only ever goes into a *_corr folder, or to a path the user picked in a
- *  save dialog: raw measurement files can never be overwritten. */
+/** Output only ever goes into a *_corr folder, to a path the user picked in a save
+ *  dialog, or to a specimen notes file (*_notes.json): raw measurement files can never
+ *  be overwritten. */
 function writable(p) {
   const full = path.resolve(p);
-  return savedPaths.has(full) || /_corr$/i.test(path.basename(path.dirname(full)));
+  return savedPaths.has(full) || /_corr$/i.test(path.basename(path.dirname(full))) || /_notes\.json$/i.test(full);
 }
 
 // ------------------------------------------------------------------ window

@@ -262,11 +262,131 @@
     return 0;
   }
 
-  /** Paramagnetic reference (Curie-Weiss law): chi(T) = C / (T - theta), T in kelvin,
-   *  with C chosen so the curve passes through refChi at refT (deg C). null where T <= theta. */
-  function curieWeiss(temps, refT, refChi, thetaK) {
-    const K = 273.15, c = refChi * (refT + K - thetaK);
-    return temps.map((t) => (t + K - thetaK > 0.5 ? c / (t + K - thetaK) : null));
+  /** Least-squares fit of chi = chi0 + C / (T - theta), T in kelvin (temps in deg C), theta
+   *  fixed: a paramagnetic part C / (T - theta) on top of a temperature-independent chi0
+   *  (ferromagnetic + diamagnetic).
+   *  -> { chi0, C, theta, n, rms, r2, seC (standard error of C) }, or null with fewer than 4 points. */
+  function hyperbolaFit(temps, chis, theta = 0) {
+    const n = temps.length;
+    if (n < 4) return null;
+    const xs = temps.map((t) => 1 / (t + 273.15 - theta));
+    if (xs.some((x) => !(x > 0))) return null;
+    const mx = xs.reduce((a, b) => a + b, 0) / n, my = chis.reduce((a, b) => a + b, 0) / n;
+    let sxx = 0, sxy = 0, sst = 0;
+    for (let i = 0; i < n; i++) { sxx += (xs[i] - mx) ** 2; sxy += (xs[i] - mx) * (chis[i] - my); sst += (chis[i] - my) ** 2; }
+    if (!(sxx > 0)) return null;
+    const C = sxy / sxx, chi0 = my - C * mx;
+    let sse = 0;
+    for (let i = 0; i < n; i++) sse += (chis[i] - chi0 - C * xs[i]) ** 2;
+    return { chi0, C, theta, n, rms: Math.sqrt(sse / n), r2: sst > 0 ? 1 - sse / sst : 1,
+             seC: n > 2 ? Math.sqrt(sse / (n - 2) / sxx) : Infinity };
+  }
+
+  /** Value of a fitted hyperbola at t (deg C). */
+  function hyperbolaAt(fit, t) { return fit.chi0 + fit.C / (t + 273.15 - fit.theta); }
+
+  /** Noise of a curve from its second differences (robust: median absolute deviation). */
+  function noiseSigma(ys) {
+    const d = [];
+    for (let i = 1; i < ys.length - 1; i++) d.push(ys[i - 1] - 2 * ys[i] + ys[i + 1]);
+    if (!d.length) return 0;
+    const med = (a) => { const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+    const m = med(d);
+    return (1.4826 * med(d.map((v) => Math.abs(v - m)))) / Math.sqrt(6);
+  }
+
+  /** Where a corrected run is paramagnetic on top of a constant: stretches of the heating
+   *  (low-T: warming) branch that follow chi = chi0 + C / (T - theta) (Hrouda's hyperbola
+   *  method), as candidates to fit. Only the heating branch: once a run has been heated,
+   *  new minerals (magnetite) have formed, so cooling branches are not fitted.
+   *  The branch is followed in measurement order: a stretch grows while the hyperbola
+   *  fitted to it also predicts the next 8 deg C within the tolerance (4 x noise, 4 % of
+   *  chi); where the curve stays outside it for 8 deg C it leaves the hyperbola -- a
+   *  mineral forming or breaking down, or a Curie point. A low-T warming branch is also
+   *  offered as a whole (the usual fit for cryostat runs). Kept are stretches of 60 deg C or
+   *  more with a well-determined C > 0 whose hyperbola, extrapolated to room temperature,
+   *  stays below the measured chi (what is left there is ferromagnetic). The first 8 deg C
+   *  (start-up) and points beyond the empty holder's range are left out.
+   *  -> [{ from, to, lo, hi, fit, n, whole, atStart, departure: { t, dir } | null, share }]
+   *     from / to: first / last temperature in measurement order; departure: where the
+   *     curve leaves the hyperbola after the stretch's start; share: the paramagnetic part
+   *     at the point nearest refT: { t, para, measured, fraction, se } */
+  function paraCandidates(corr, { theta = 0, refT = 25 } = {}) {
+    const out = [];
+    const lowT = !corr.temp.some((t) => t > 150);
+    {
+      const all = [];
+      for (let i = 0; i < corr.temp.length; i++) if (corr.segment[i] === "heating") all.push(i);
+      if (all.length < 12) return out;
+      const t0 = corr.temp[all[0]];
+      const idx = all.filter((i) => Math.abs(corr.temp[i] - t0) >= 8 && !(corr.outside && corr.outside[i]));
+      const T = idx.map((i) => corr.temp[i]), X = idx.map((i) => corr.csusc[i]);
+      const n = T.length;
+      if (n < 12) return out;
+      const span = Math.max(...T) - Math.min(...T);
+      const sigma = noiseSigma(X);
+      const need = Math.max(5, Math.round((8 * n) / (span || 1)));      // points in 8 deg C
+      const grow = Math.max(2, need >> 1), MIN_SPAN = 60;
+      const kRef = nearestIndex(T, refT), tRef = T[kRef], mRef = X[kRef];
+      const fitOf = (a, b) => hyperbolaFit(T.slice(a, b + 1), X.slice(a, b + 1), theta);
+      // first point from j0 on that starts `need` consecutive points on one side of the band
+      const leaves = (fit, j0, j1) => {
+        let side = 0, start = -1, count = 0;
+        for (let j = j0; j <= j1; j++) {
+          const f = hyperbolaAt(fit, T[j]), d = X[j] - f, tl = Math.max(4 * sigma, 0.04 * Math.abs(f));
+          const s = d > tl ? 1 : d < -tl ? -1 : 0;
+          if (s && s === side) count++;
+          else if (s) { side = s; start = j; count = 1; } else { side = 0; count = 0; }
+          if (count >= need) return { j: start, dir: side };
+        }
+        return null;
+      };
+      const xr = 1 / (tRef + 273.15 - theta);
+      const physical = (f) => f && f.C > 0 && f.C >= 5 * f.seC &&
+        f.chi0 + f.C * xr - mRef <= Math.max(4 * sigma, 0.25 * Math.abs(mRef)) &&
+        !(mRef > 0 && (f.seC * xr) / mRef > 0.3);
+      const add = (j, end, f, dep, whole) => {
+        const para = f.C * xr;
+        out.push({
+          from: T[j], to: T[end], lo: Math.min(T[j], T[end]), hi: Math.max(T[j], T[end]), fit: f, n: end - j + 1,
+          whole, atStart: j === 0, departure: dep ? { t: T[dep.j], dir: dep.dir } : null,
+          share: { t: tRef, para, measured: mRef, fraction: mRef > 0 ? para / mRef : null, se: mRef > 0 ? (f.seC * xr) / mRef : null },
+        });
+      };
+      if (lowT) {
+        const f = fitOf(0, n - 1);
+        if (physical(f)) add(0, n - 1, f, leaves(f, 0, n - 1), true);
+      }
+      let j = 0;
+      while (j + need < n) {
+        // grow while the hyperbola fitted so far also predicts the next 8 deg C
+        let k = Math.min(n - 1, j + Math.max(8, need * 2) - 1);
+        let fit = fitOf(j, k);
+        if (!fit || leaves(fit, j, k)) { j += grow; continue; }
+        let dep = null;
+        for (;;) {
+          dep = leaves(fit, j, Math.min(n - 1, k + need));
+          if (dep || k >= n - 1) break;
+          k = Math.min(n - 1, k + grow);
+          fit = fitOf(j, k);
+        }
+        const end = dep ? Math.max(j, Math.min(k, dep.j - 1)) : k;
+        const f = end === k ? fit : fitOf(j, end);
+        if (Math.abs(T[end] - T[j]) >= MIN_SPAN && physical(f)) {
+          // a stretch that is (nearly) the whole low-T branch adds nothing to the whole-branch fit
+          const w = out.find((c) => c.whole);
+          if (!(w && Math.min(w.hi, Math.max(T[j], T[end])) - Math.max(w.lo, Math.min(T[j], T[end])) >= 0.85 * (w.hi - w.lo))) add(j, end, f, dep, false);
+          j = end + 1;
+        } else j = dep && dep.j > j ? Math.max(j + grow, dep.j - need) : j + grow;
+      }
+    }
+    return out;
+  }
+
+  /** The candidate to show by default: a low-T warming branch as a whole, the stretch a
+   *  heating starts with (before the sample changes), else the longest stretch. */
+  function defaultParaCandidate(cands) {
+    return cands.find((c) => c.whole) || cands.find((c) => c.atStart) || [...cands].sort((a, b) => b.n - a.n)[0] || null;
   }
 
   /** Index of the value nearest to target. */
@@ -437,12 +557,41 @@
     return joinPath(runDir, name + "_corr");
   }
 
+  /** The specimen notes file for runs in runDir: <X>_raw/ and <X>_corr/ share <X>_notes.json
+   *  beside them, any other folder gets <folder>/<folder>_notes.json. */
+  function notesPath(runDir) {
+    const name = basename(runDir);
+    if (/_(raw|corr)$/i.test(name)) return joinPath(dirname(runDir), name.replace(/_(raw|corr)$/i, "") + "_notes.json");
+    return joinPath(runDir, name + "_notes.json");
+  }
+
+  /** Notes file text: JSON with every non-ASCII character escaped, so it survives the
+   *  Latin-1 file I/O unchanged. */
+  function notesText(notes) {
+    const sorted = {};
+    for (const k of Object.keys(notes).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) if (notes[k]) sorted[k] = notes[k];
+    const doc = { app: "TX Studio", about: "Notes per specimen piece, edited in TX Studio", notes: sorted };
+    return JSON.stringify(doc, null, 2).replace(/[\u007f-￿]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")) + "\r\n";
+  }
+
+  /** -> notes object, or null when the text is not a TX Studio notes file. */
+  function parseNotes(text) {
+    try {
+      const d = JSON.parse(text);
+      if (!d || typeof d !== "object" || !d.notes || typeof d.notes !== "object" || Array.isArray(d.notes)) return null;
+      const out = {};
+      for (const [k, v] of Object.entries(d.notes)) if (typeof v === "string" && v.trim()) out[k] = v;
+      return out;
+    } catch { return null; }
+  }
+
   return {
     COL, REF_LINES,
     basename, dirname, joinPath, extOf, stemOf, loose, isCurveFile, isRecordFile, kindOf, isIm, mainStem,
     parseCurve, parseRecord, findRecordPath, runId, groupRuns, looksLikeDryRun, runLabel, overlayTags,
-    runningMean, holderValues, hasStoredSmoothing, storedSmoothingN, curieWeiss, nearestIndex,
+    runningMean, holderValues, hasStoredSmoothing, storedSmoothingN, nearestIndex,
+    hyperbolaFit, hyperbolaAt, noiseSigma, paraCandidates, defaultParaCandidate,
     segments, holderTrace, correctCurve, pairDryRun,
-    writeCurve, runCsv, outputDir, round,
+    writeCurve, runCsv, outputDir, notesPath, notesText, parseNotes, round,
   };
 });

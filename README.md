@@ -39,9 +39,15 @@ Open a folder (button, `Ctrl+O`, or drop a folder / a `.cur` file on the window)
 sidebar shows its thermomagnetic runs — `HT` = high-T furnace (`.cur`), `LT` = low-T
 cryostat (`.clw`) — with the measurement date from the instrument record (`.KHT`/`.KLT`).
 
-* An `_Im` (out-of-phase) file is merged into its run (`Im` badge).
+* An `_Im` file — the out-of-phase ("imaginary", χ″) susceptibility — is merged into its run
+  (`Im` badge); the *Out-of-phase* and *Both* views plot it.
 * Files stay in alphabetical order; the runs of one piece (`27H1`, `27L1`, `27L2`) share a
   faint background band, like Finder's row stripes.
+* **Notes** classify a piece at a glance: type them in the inspector (or click a tag —
+  paramagnetic, magnetite, hematite, pyrrhotite, …) and they show faded after the name of
+  every run of that piece. The filter box searches them too. They are kept in a small
+  `<specimen>_notes.json` beside the raw folder (`AB24CD101_TX/AB24CD101_TX_notes.json`),
+  so they travel with the data to other PCs.
 * The folder that holds the runs is bold; single-child folders are compacted
   (`AB24CD101_TX / AB24CD101_TX_raw`); exported `_corr` folders are hidden (filter menu).
 * ↑/↓ flips through runs, Ctrl/Shift-click overlays several, type to filter.
@@ -99,15 +105,24 @@ Overlaid runs keep the run-type colours; every curve gets a small tag in its own
 naming the file by the part between specimen ID and run code (`AB24CD112-30SH1` → `30S`),
 made unique only where needed (`27 L1` / `27 L2`, `101 · 31` / `112 · 31`).
 
-### Paramagnetic reference
+### Paramagnetic fit
 
-![Low-T run with the Curie–Weiss reference curve and the inspector's verdict](docs/screenshots/paramagnetic.png)
+![Heating run with the fitted hyperbola, the fitted stretch shaded, and the paramagnetic share in the inspector](docs/screenshots/paramagnetic.png)
 
-The *Paramagnetic* toggle draws the Curie–Weiss curve χ = C / (T − θ) (T in kelvin) that a
-purely paramagnetic sample would follow, scaled to the corrected χ nearest 25 °C
-(θ adjustable, default 0 K = Curie law; a straight line in the 1/χ view). Samples without
-magnetite or other ferromagnetic phases follow it; the inspector reports the largest
-departure. In overlays each run has its own curve, labelled with its tag.
+The *Paramagnetic* toggle fits χ = χ₀ + C / (T − θ) (T in kelvin; Hrouda's hyperbola method)
+where the curve is paramagnetic on top of a temperature-independent χ₀, and reports the
+**paramagnetic share** of χ near room temperature (C / (T − θ) over the measured χ, with its
+uncertainty). Only for **L1** and the **heating of H1**: after heating, magnetite has formed.
+
+* The heating curve is followed from its start while the hyperbola fitted so far also
+  predicts the next 8 °C; where χ stays off it, the inspector says at which temperature the
+  curve **leaves the hyperbola** and which way — rising above it is typically a mineral
+  forming (pyrite, siderite or clays → magnetite), falling below a Curie point. A ring marks
+  the spot on the plot.
+* The inspector lists every stretch that follows a hyperbola (for low-T runs also the whole
+  warming branch). **Hover** one to shade it on the plot, **click** it to use it and zoom there.
+* The fit is drawn solid over the fitted stretch and dashed where extrapolated, labelled
+  "para 61 %"; θ is adjustable (default 0 K = Curie law). In overlays each run has its own fit.
 
 ### Export
 
@@ -116,8 +131,8 @@ departure. In overlays each run has its own curve, labelled with its tag.
 (+ `_Im`) in the original format, a CSV per run (`piece, run, mode, temp_C, time_s, segment,
 chi_in_1e6SI, chi_in_norm, chi_out_1e6SI, chi_raw_1e6SI, holder_1e6SI`), a combined CSV and
 a `_sources.txt` noting which empty holder (and smoothing) corrected what. The app asks
-before replacing existing files and refuses to write anywhere but a `*_corr` folder, so
-raw data can't be overwritten.
+before replacing existing files and refuses to write anywhere but a `*_corr` folder (and
+the `*_notes.json` notes files), so raw data can't be overwritten.
 
 ## The correction
 
@@ -141,10 +156,11 @@ Needs Node.js 22+ on Windows.
 ```
 npm install
 npm run host            # build the Windows app and run it on the source tree
-npm test                # parser / smoothing / pairing / correction tests
+npm test                # parser / smoothing / pairing / correction / hyperbola tests
 npm run pack            # dist\TX-Studio-win32-x64.zip with installer
 npm start               # alternative: run the UI in Electron (development only)
 node test/check_run.js <folder> <specimen prefix>   # corrections of one specimen vs stored / earlier CSVs
+node test/para_fit.js <folder> [<run prefix> ...]    # paramagnetic stretches of every run
 ```
 
 The app is a ~40 KB Windows host (`host/TXStudio.cs`) that shows the web UI (`src/`) in the

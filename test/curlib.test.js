@@ -39,12 +39,42 @@ test("empty-holder smoothing modes", () => {
   assert.deepEqual(L.holderValues(rows, { mode: "stored" }), sm);
 });
 
-test("Curie-Weiss reference passes through the reference point", () => {
-  const y = L.curieWeiss([25, -196.15, 726.85], 25, 10, 0);
-  assert.ok(Math.abs(y[0] - 10) < 1e-9);
-  assert.ok(Math.abs(y[1] - 10 * 298.15 / 77) < 1e-9);        // 77 K: ~3.9x
-  assert.ok(Math.abs(y[2] - 10 * 298.15 / 1000) < 1e-9);
+// synthetic corrected run: chi(T) on a heating (and optional cooling) branch, with a
+// small deterministic wobble standing in for noise
+function synthRun(temps, chi, wobble = 0.01) {
+  const segment = L.segments(temps);
+  return { temp: temps, csusc: temps.map((t, i) => chi(t, segment[i]) + wobble * Math.sin(i * 2.3)), segment, outside: temps.map(() => false) };
+}
+const ramp = (a, b, step) => Array.from({ length: Math.round((b - a) / step) + 1 }, (_, i) => a + i * step);
+
+test("hyperbola fit recovers chi0 and C", () => {
+  const T = ramp(-190, 20, 2), f = L.hyperbolaFit(T, T.map((t) => 1.5 + 400 / (t + 273.15 + 5)), -5);
+  assert.ok(Math.abs(f.chi0 - 1.5) < 1e-9 && Math.abs(f.C - 400) < 1e-6 && f.r2 > 0.999999);
+  assert.ok(Math.abs(L.hyperbolaAt(f, 25) - (1.5 + 400 / 303.15)) < 1e-9);
   assert.equal(L.nearestIndex([-190, -50, 0.3], 25), 2);
+});
+
+test("paramagnetic candidates: heating stretch ends where a new mineral forms", () => {
+  // paramagnetic (chi0 = 1, C = 900) until 350 deg C, then chi climbs above the hyperbola
+  const temps = [...ramp(25, 700, 2.5), ...ramp(697.5, 30, 2.5)];
+  const corr = synthRun(temps, (t, seg) => 1 + 900 / (t + 273.15) + (seg === "cooling" ? 5 : t > 350 ? 0.03 * (t - 350) : 0));
+  const cands = L.paraCandidates(corr);
+  assert.equal(cands.length, 1, "cooling is never fitted, only the heating stretch");
+  const c = L.defaultParaCandidate(cands);
+  assert.ok(c.atStart && c.lo < 40 && Math.abs(c.hi - 350) < 15, `stretch ${c.lo}..${c.hi}`);
+  assert.equal(c.departure.dir, 1);
+  assert.ok(Math.abs(c.departure.t - 355) < 15, `departure at ${c.departure.t}`);
+  assert.ok(Math.abs(c.fit.C - 900) < 40 && Math.abs(c.fit.chi0 - 1) < 0.1);
+  const t = c.share.t, para = 900 / (t + 273.15);
+  assert.ok(Math.abs(c.share.fraction - para / (1 + para)) < 0.02, `share ${c.share.fraction}`);
+});
+
+test("paramagnetic candidates: low-T warming branch as a whole; flat curves give none", () => {
+  const T = ramp(-195, 15, 1.5);
+  const c = L.defaultParaCandidate(L.paraCandidates(synthRun(T, (t) => 3 + 400 / (t + 273.15))));
+  assert.ok(c.whole && c.departure === null);
+  assert.ok(Math.abs(c.share.fraction - (400 / (T[T.length - 1] + 273.15)) / (3 + 400 / (T[T.length - 1] + 273.15))) < 0.01);
+  assert.equal(L.paraCandidates(synthRun(T, () => 50, 0.3)).length, 0, "temperature-independent chi is not paramagnetic");
 });
 
 test("fixed-width parse copes with touching columns", () => {

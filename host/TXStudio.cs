@@ -30,7 +30,7 @@ namespace TXStudio
 {
     static class Program
     {
-        public const string Version = "0.5.0.0";
+        public const string Version = "0.6.0.0";
 
         [STAThread]
         static void Main(string[] args)
@@ -361,13 +361,14 @@ namespace TXStudio
             try { return p == null ? null : File.ReadAllText(p, Latin1); } catch { return null; }
         }
 
-        // Output only ever goes into a *_corr folder, or to a path picked in a save dialog:
-        // raw measurement files can never be overwritten.
+        // Output only ever goes into a *_corr folder, to a path picked in a save dialog, or to
+        // a specimen notes file (*_notes.json): raw measurement files can never be overwritten.
         void Write(string p, byte[] bytes)
         {
             var full = Path.GetFullPath(p);
             var parent = NameOf(Path.GetDirectoryName(full) ?? "");
-            if (!savedPaths.Contains(full) && !parent.EndsWith("_corr", StringComparison.OrdinalIgnoreCase))
+            if (!savedPaths.Contains(full) && !parent.EndsWith("_corr", StringComparison.OrdinalIgnoreCase)
+                && !Path.GetFileName(full).EndsWith("_notes.json", StringComparison.OrdinalIgnoreCase))
                 throw new UnauthorizedAccessException("refusing to write outside a *_corr folder: " + p);
             Directory.CreateDirectory(Path.GetDirectoryName(full));
             File.WriteAllBytes(full, bytes);

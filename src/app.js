@@ -46,7 +46,7 @@ const DEFAULTS = {
   smoothN: 5, rule: "nearest", view: "corrected", comp: "in",
   heating: true, cooling: true, markers: false, refs: true, stored: false, para: false, paraTheta: 0,
   onlyCurves: true, showCorr: false, showIm: false, theme: "system", sideW: 300, dryOpen: true,
-  overrides: {}, dryOverrides: {}, holderSmooth: {}, expanded: {}, lastSel: {}, lastRoot: null,
+  overrides: {}, dryOverrides: {}, holderSmooth: {}, paraPick: {}, expanded: {}, lastSel: {}, lastRoot: null,
 };
 const state = {
   root: null, tree: null,
@@ -55,6 +55,7 @@ const state = {
   visible: [],              // run ids in sidebar order (keyboard navigation)
   selected: [], anchor: null,
   expanded: new Set(),
+  notes: new Map(),         // notes file (lower-case path) -> { path, notes: {key: text}, foreign, dirty }
   s: { ...DEFAULTS },
   loading: false,
 };
@@ -131,6 +132,9 @@ async function openFolder(root, { quiet = false } = {}) {
     }
     state.dry = [...state.runs.values()].filter((r) => r.dry && !r.out)
       .sort((a, b) => a.kind.localeCompare(b.kind) || (b.time || 0) - (a.time || 0));
+    const notes = await loadNotes();
+    if (stale()) return;
+    state.notes = notes;
 
     const firstOpen = state.root !== root;
     state.root = root;
@@ -222,63 +226,240 @@ function setHolderSmooth(d, spec) {
   renderViewer(); renderDryPanel(); renderStatusRight();
 }
 
-// ====================================================================== paramagnetic reference
-/** Curie-Weiss curve through the corrected chi nearest 25 deg C on the heating/warming branch,
- *  plus how far the measured curve departs from it. */
-function paraFor(corr) {
-  const idx = corr.temp.map((_, i) => i).filter((i) => corr.segment[i] === "heating");
-  if (idx.length < 3) return null;
-  const k = idx[L.nearestIndex(idx.map((i) => corr.temp[i]), 25)];
-  const refT = corr.temp[k], refChi = corr.csusc[k], theta = state.s.paraTheta || 0;
-  if (!(refChi > 0)) return { invalid: true, refT, refChi };
-  const t0 = Math.min(...corr.temp), t1 = Math.max(...corr.temp);
-  const x = Array.from({ length: 161 }, (_, i) => t0 + ((t1 - t0) * i) / 160);
-  const y = L.curieWeiss(x, refT, refChi, theta);
-  const yp = L.curieWeiss(idx.map((i) => corr.temp[i]), refT, refChi, theta);
-  // judge the shape away from the start-up transient (first 8 deg C of the branch; the
-  // cryostat needs that to settle) and outside the empty holder's range
-  const tStart = corr.temp[idx[0]];
-  let worst = { ratio: 1, t: refT };
-  idx.forEach((i, j) => {
-    if (!yp[j] || j < 3 || Math.abs(corr.temp[i] - tStart) < 8 || (corr.outside && corr.outside[i])) return;
-    const r = corr.csusc[i] / yp[j];
-    if (Math.abs(r - 1) > Math.abs(worst.ratio - 1)) worst = { ratio: r, t: corr.temp[i] };
+// ====================================================================== specimen notes
+// One short note per specimen piece (27H1, 27L1 and 27L2 share one), kept in a small
+// <specimen>_notes.json beside the raw folder (see CurLib.notesPath), so it travels with
+// the data. A file of that name that is not a TX Studio notes file is never overwritten.
+const pieceOf = (r) => (r.label.run ? `${r.label.spec}|${r.label.piece}`.toLowerCase() : null);
+const noteKey = (r) => (r.label.spec && r.label.run ? `${r.label.spec}-${r.label.piece}` : r.stem);
+const notesFileFor = (r) => state.notes.get(L.notesPath(r.dir).toLowerCase());
+function noteOf(r) { const f = notesFileFor(r); return (f && f.notes[noteKey(r)]) || ""; }
+
+async function loadNotes() {
+  const paths = [...new Map([...state.runs.values()].map((r) => { const p = L.notesPath(r.dir); return [p.toLowerCase(), p]; })).values()];
+  const texts = paths.length ? await api.readTexts(paths) : [];
+  const m = new Map();
+  paths.forEach((p, i) => {
+    const old = state.notes.get(p.toLowerCase());
+    if (old && old.dirty) { m.set(p.toLowerCase(), old); return; }       // edit not written yet
+    const notes = texts[i] == null ? {} : L.parseNotes(texts[i]);
+    m.set(p.toLowerCase(), { path: p, notes: notes || {}, foreign: texts[i] != null && !notes });
   });
-  return { x, y, smax: Math.max(...corr.csusc), refT, refChi, theta, worst };
+  return m;
 }
 
-function paraCard(r) {
-  const card = h("div", { class: "card" }, h("h3", {}, "Paramagnetic reference"));
-  card.append(h("p", { style: "margin:0 0 10px;color:var(--text-2);font-size:12.5px" },
-    "Curie–Weiss law χ = C / (T − θ), T in kelvin, scaled to the measured χ near room temperature (violet dashed line). A purely paramagnetic sample follows it; magnetite and other ferromagnetic phases depart from it."));
-  const inp = h("input", { type: "number", step: 1, value: state.s.paraTheta || 0 });
-  inp.addEventListener("change", () => { saveSettings({ paraTheta: Number(inp.value) || 0 }); renderViewer(); });
-  card.append(h("div", { class: "field" }, h("label", {}, "Weiss temperature θ"),
-    h("div", { class: "num" }, inp, h("span", { class: "delta", style: "margin-left:6px" }, "K · ≈ 0 for most paramagnetic minerals"))));
-  const res = r && !r.dry ? correctionFor(r) : null;
-  if (r && res) {
-    const p = paraFor(res.cin);
-    if (!p) return card;
-    if (p.invalid) {
-      card.append(note("warn", `χ near room temperature is ${p.refChi.toFixed(2)} (≤ 0, diamagnetic): no paramagnetic reference can be scaled to it.`));
-    } else {
-      card.append(h("dl", { class: "kv" },
-        h("dt", {}, "Scaled at"), h("dd", {}, `${p.refT.toFixed(1)} °C, χ = ${p.refChi.toFixed(2)}`)));
-      const w = p.worst;
-      if (Math.abs(w.ratio - 1) <= 0.2) {
-        card.append(note("ok", `The ${r.kind === "LT" ? "warming" : "heating"} curve stays within ±20 % of the paramagnetic curve – no clear ferromagnetic contribution.`));
-      } else {
-        const how = w.ratio <= 0 ? `χ falls to ≤ 0 at ${w.t.toFixed(0)} °C while the paramagnetic curve stays positive`
-          : `χ is ${w.ratio.toFixed(w.ratio < 10 ? 2 : 0)}× the paramagnetic curve at ${w.t.toFixed(0)} °C`;
-        card.append(note("info", `Not purely paramagnetic: ${how}. ${w.ratio > 1
-          ? "Above the curve points to a ferromagnetic contribution (e.g. magnetite) or a mineral change during heating."
-          : "Below the curve means weaker temperature dependence – a diamagnetic / temperature-independent part, or a ferromagnetic phase whose χ drops."}`));
-      }
-    }
+const noteTimers = new Map();
+const renderTreeSoon = debounce(() => renderTree(), 150);
+function setNote(r, text) {
+  const f = notesFileFor(r);
+  if (!f) return;
+  if (f.foreign) { toast(`${L.basename(f.path)} exists but is not a TX Studio notes file – left unchanged`); return; }
+  const key = noteKey(r), v = text.trim();
+  if ((f.notes[key] || "") === v) return;
+  if (v) f.notes[key] = v; else delete f.notes[key];
+  f.dirty = true;
+  renderTreeSoon();
+  clearTimeout(noteTimers.get(f.path));
+  noteTimers.set(f.path, setTimeout(() => writeNotes(f), 800));
+}
+async function writeNotes(f) {
+  clearTimeout(noteTimers.get(f.path));
+  noteTimers.delete(f.path);
+  if (!f.dirty) return;
+  f.dirty = false;
+  try {
+    await api.writeText(f.path, L.notesText(f.notes));
+    setStatus(`Notes saved · ${L.basename(f.path)}`);
+  } catch (err) {
+    f.dirty = true;
+    toast(`Could not save the notes: ${err.message || err}`);
   }
+}
+const flushNotes = () => { for (const f of state.notes.values()) if (f.dirty) writeNotes(f); };
+
+const NOTE_TAGS = ["paramagnetic", "magnetite", "hematite", "pyrrhotite", "goethite", "pyrite", "siderite", "alteration", "check"];
+
+function notesCard(r) {
+  const f = notesFileFor(r);
+  const sibs = [...state.runs.values()].filter((x) => !x.out && x.label.run && pieceOf(x) && pieceOf(x) === pieceOf(r))
+    .map((x) => x.label.run).sort();
+  const card = h("div", { class: "card" }, h("h3", {}, h("span", { class: "grow" }, "Notes"),
+    h("span", { class: "delta" }, r.label.run ? `${r.label.piece}${sibs.length > 1 ? ` · ${sibs.join(", ")}` : ""}` : r.stem)));
+  const ta = h("textarea", { rows: 2, class: "note-input", spellcheck: "false",
+    placeholder: "Classify this piece, e.g. paramagnetic; magnetite forms ≈ 400 °C" });
+  ta.value = noteOf(r);
+  const fit = () => { ta.style.height = "auto"; ta.style.height = Math.min(160, ta.scrollHeight + 2) + "px"; };
+  ta.addEventListener("input", () => { setNote(r, ta.value); fit(); markTags(); });
+  ta.addEventListener("blur", flushNotes);
+  ta.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); ta.blur(); } });
+  requestAnimationFrame(fit);
+  // one-click tags: add / remove a word from the note
+  const has = (t) => new RegExp(`(^|[;,\\s])${t}($|[;,\\s])`, "i").test(ta.value);
+  const tags = h("div", { class: "note-tags" });
+  const markTags = () => { for (const b of tags.children) b.classList.toggle("on", has(b.textContent)); };
+  for (const t of NOTE_TAGS) {
+    tags.append(h("button", { class: "note-tag", title: `Add / remove “${t}”`, onclick: () => {
+      const parts = ta.value.split(/\s*;\s*/).map((x) => x.trim()).filter(Boolean);
+      const i = parts.findIndex((x) => x.toLowerCase() === t);
+      if (i >= 0) parts.splice(i, 1);
+      else if (has(t)) { toast(`“${t}” is already part of the note`); return; } else parts.push(t);
+      ta.value = parts.join("; ");
+      setNote(r, ta.value); fit(); markTags();
+    } }, t));
+  }
+  markTags();
+  card.append(ta, tags);
+  if (f && f.foreign) card.append(note("warn", `<code>${esc(L.basename(f.path))}</code> already exists and is not a TX Studio notes file, so notes are not saved there.`));
+  else if (f) card.append(h("div", { class: "delta", style: "margin-top:6px" }, h("span", {}, "Shown after the name in the sidebar · saved to "),
+    h("a", { class: "link", title: f.path, onclick: () => api.reveal(f.path) }, L.basename(f.path))));
   return card;
 }
 
+// ====================================================================== paramagnetic fit
+// chi = chi0 + C / (T - theta) fitted where the heating / warming curve is paramagnetic on
+// top of a constant (CurLib.paraCandidates). Only L1 and the heating of H1: once a piece
+// has been heated, new minerals (magnetite) have formed.
+/** -> null when the fit applies to this run, else why not. */
+function paraBlocked(r) {
+  const m = /^([HL])(\d+)$/i.exec(r.label.run || "");
+  if (m) {
+    if (+m[2] < 2) return null;
+    return m[1].toUpperCase() === "L"
+      ? `${m[0].toUpperCase()} is measured after the heating – magnetite has formed by then, so no paramagnetic fit.`
+      : `${m[0].toUpperCase()} is a repeated heating – the sample changed in the first one, so no paramagnetic fit.`;
+  }
+  // other names: a low-T run measured after a high-T run of the same piece
+  if (r.kind === "LT" && r.time != null && pieceOf(r) &&
+      [...state.runs.values()].some((x) => x.kind === "HT" && !x.dry && x.time != null && x.time < r.time && pieceOf(x) === pieceOf(r))) {
+    return "Measured after this piece was heated – magnetite has formed by then, so no paramagnetic fit.";
+  }
+  return null;
+}
+
+/** -> { blocked } | { cands, active, isDefault } for a sample run (null without a correction). */
+function paraInfo(r, res = correctionFor(r)) {
+  if (!res) return null;
+  const blocked = paraBlocked(r);
+  if (blocked) return { blocked };
+  const cands = L.paraCandidates(res.cin, { theta: state.s.paraTheta || 0 });
+  const def = L.defaultParaCandidate(cands);
+  // the stretch picked earlier: the candidate that overlaps it best
+  const pick = state.s.paraPick[r.main];
+  let active = null, best = 0;
+  if (pick) for (const c of cands) {
+    const iou = (Math.min(c.hi, pick[1]) - Math.max(c.lo, pick[0])) / (Math.max(c.hi, pick[1]) - Math.min(c.lo, pick[0]));
+    if (iou > best) { best = iou; active = c; }
+  }
+  active = active || def;
+  return { cands, active, def };
+}
+
+const fmtT = (t) => `${Math.round(t)}`.replace("-", "−");
+const rangeText = (c) => `${fmtT(c.lo)} … ${fmtT(c.hi)} °C`;
+const pctText = (c) => (c.share.fraction == null ? "χ ≤ 0" : `${Math.round(100 * c.share.fraction)} %`);
+
+function pickPara(r, c, pi) {
+  if (c === pi.def) delete state.s.paraPick[r.main]; else state.s.paraPick[r.main] = [c.lo, c.hi];
+  persist();
+  renderViewer();
+  jumpToStretch(c.lo, c.hi, rangeText(c));
+}
+
+/** Zoom so the stretch lo..hi fills the plot (χ scaled to the heating curves and the fits,
+ *  not to a cooling curve far above them), then flash its band. */
+function jumpToStretch(lo, hi, label) {
+  const pad = Math.max(5, (hi - lo) * 0.08);
+  zoomToRange(lo - pad, hi + pad, () => showBand(lo, hi, label, true), (tr) => tr.isPara || /^(heating|warming)/.test(tr.name || ""));
+}
+
+/** Hover rows: a stretch row shades its range on the plot; click picks it and zooms there. */
+function stretchRow(cls, kids, lo, hi, label, onclick) {
+  const row = h("button", { class: cls }, ...kids);
+  row.addEventListener("mouseenter", () => showBand(lo, hi, label));
+  row.addEventListener("mouseleave", () => hideBand());
+  row.addEventListener("focus", () => showBand(lo, hi, label));
+  row.addEventListener("blur", () => hideBand());
+  row.addEventListener("click", onclick);
+  return row;
+}
+
+function thetaField() {
+  const inp = h("input", { type: "number", step: 1, value: state.s.paraTheta || 0 });
+  inp.addEventListener("change", () => { saveSettings({ paraTheta: Number(inp.value) || 0 }); renderViewer(); });
+  return h("div", { class: "field", style: "margin-top:12px" }, h("label", {}, "Weiss temperature θ"),
+    h("div", { class: "num" }, inp, h("span", { class: "delta", style: "margin-left:6px" }, "K · 0 = Curie law, fine for most paramagnetic minerals")));
+}
+
+function paraCard(r) {
+  const card = h("div", { class: "card" }, h("h3", {}, "Paramagnetic fit"));
+  card.append(h("p", { class: "card-intro" },
+    "χ = χ₀ + C / (T − θ) fitted where the curve is paramagnetic on top of a constant χ₀ (Hrouda's hyperbola method) – L1 and the heating of H1 only."));
+  const res = correctionFor(r);
+  const pi = res && paraInfo(r, res);
+  if (!res) { card.append(note("info", "Needs an empty-holder correction first.")); return card; }
+  if (pi.blocked) { card.append(note("info", pi.blocked)); return card; }
+  if (!pi.cands.length) {
+    card.append(note("info", `No stretch of the ${r.kind === "LT" ? "warming" : "heating"} curve of 60 °C or more follows a hyperbola – ferromagnetic behaviour dominates.`));
+    card.append(thetaField());
+    return card;
+  }
+  const c = pi.active, sh = c.share, f = c.fit;
+  const big = h("div", { class: "para-big" });
+  if (sh.fraction == null) big.append(h("b", {}, "χ ≤ 0"), h("span", {}, ` at ${fmtT(sh.t)} °C – diamagnetic overall`));
+  else big.append(h("b", {}, `${Math.round(100 * sh.fraction)} %`), h("span", {}, " paramagnetic"),
+    h("span", { class: "delta" }, ` ± ${Math.max(1, Math.round(100 * sh.se))} % · at ${fmtT(sh.t)} °C`));
+  card.append(big);
+  card.append(h("dl", { class: "kv" },
+    h("dt", {}, "Paramagnetic χ"), h("dd", {}, `${sh.para.toFixed(2)}  (C = ${f.C.toFixed(0)} K)`),
+    h("dt", {}, "Constant χ₀"), h("dd", {}, f.chi0.toFixed(2)),
+    h("dt", {}, "Measured χ"), h("dd", {}, sh.measured.toFixed(2)),
+    h("dt", {}, "Fitted"), h("dd", {}, `${rangeText(c)} · ${c.n} pts`),
+    h("dt", {}, "Fit R²"), h("dd", {}, f.r2.toFixed(3))));
+  if (sh.fraction != null && sh.fraction > 1.02) {
+    card.append(note("info", "Above 100 %: χ₀ is negative – a diamagnetic matrix (quartz, calcite) takes away part of the paramagnetic signal."));
+  }
+  const d = c.departure;
+  if (d) {
+    const at = `<b>${fmtT(d.t)} °C</b>`;
+    card.append(note("info", r.kind === "HT"
+      ? (d.dir > 0 ? `The heating curve leaves the hyperbola at ${at}, χ rising above it – a magnetic mineral forming (e.g. magnetite from pyrite, siderite or clays).`
+                   : `The heating curve leaves the hyperbola at ${at}, χ falling below it – a Curie point, or a mineral breaking down.`)
+      : `The warming curve departs from the hyperbola at ${at} (χ ${d.dir > 0 ? "above" : "below"} it) – a ferromagnetic contribution changing there.`));
+  }
+  // the candidates: hover shades the stretch, click uses it and zooms there
+  const list = h("div", { class: "cand-list" }, h("div", { class: "cand-head" },
+    pi.cands.length === 1 ? "Stretch that follows a hyperbola" : `${pi.cands.length} stretches follow a hyperbola – click one to use it`));
+  for (const k of pi.cands) {
+    list.append(stretchRow(`cand${k === c ? " on" : ""}`, [
+      h("span", { class: "cand-range" }, rangeText(k)),
+      h("span", { class: "cand-what" }, k.whole ? "whole branch" : k.atStart ? "from the start" : ""),
+      h("span", { class: "cand-pct" }, pctText(k))], k.lo, k.hi, rangeText(k), () => pickPara(r, k, pi)));
+  }
+  card.append(list, thetaField());
+  return card;
+}
+
+/** Overlays: each run's fitted stretch and share; hover / click as on a single run. */
+function paraOverlayCard(runs) {
+  const tags = overlayLabels(runs);
+  const card = h("div", { class: "card" }, h("h3", {}, "Paramagnetic fit"));
+  const list = h("div", { class: "cand-list" });
+  for (const r of runs.filter((x) => !x.dry)) {
+    const pi = paraInfo(r);
+    const color = r.kind === "LT" ? "var(--warm)" : "var(--heat)";
+    const tag = h("span", { class: "run-tag", style: `color:${color};border-color:${color}` }, tags.get(r.id));
+    const c = pi && pi.active;
+    if (!c) {
+      list.append(h("div", { class: "cand off", title: pi && pi.blocked ? pi.blocked : "" }, tag,
+        h("span", { class: "cand-what" }, !pi ? "no empty holder" : pi.blocked ? "after heating" : "no hyperbola stretch")));
+      continue;
+    }
+    list.append(stretchRow("cand", [tag, h("span", { class: "cand-range" }, rangeText(c)), h("span", { class: "cand-pct" }, pctText(c))],
+      c.lo, c.hi, `${tags.get(r.id)} · ${rangeText(c)}`, () => jumpToStretch(c.lo, c.hi, `${tags.get(r.id)} · ${rangeText(c)}`)));
+  }
+  card.append(list, thetaField());
+  return card;
+}
 
 // ====================================================================== sidebar
 function renderCrumb() {
@@ -305,7 +486,7 @@ function viewNode(node, q) {
       const run = state.runs.get(runIdFor(c.path));
       if (!run) continue;
       if (L.isIm(c.path) && run.main !== c.path && !s.showIm) continue;
-      if (q && !run.stem.toLowerCase().includes(q)) continue;
+      if (q && !run.stem.toLowerCase().includes(q) && !noteOf(run).toLowerCase().includes(q)) continue;
       files.push({ path: c.path, run, im: L.isIm(c.path) && run.main !== c.path });
       if (!(L.isIm(c.path) && run.main !== c.path)) count++;
     } else if (!s.onlyCurves && !q) {
@@ -356,7 +537,7 @@ function emit(v, depth, out, q) {
   // Runs of one specimen piece (27H1, 27L1, 27L2 ...) share a faint band; bands alternate
   // per group like Finder's row stripes. Order stays alphabetical: a group is a stretch of
   // consecutive rows with the same specimen + piece.
-  const groupKey = (r) => (r.label.run ? `${r.label.spec}|${r.label.piece}` : r.id).toLowerCase();
+  const groupKey = (r) => pieceOf(r) || r.id.toLowerCase();
   const keys = v.files.map((f) => groupKey(f.run));
   let band = -1;
   for (let fi = 0; fi < v.files.length; fi++) {
@@ -369,16 +550,13 @@ function emit(v, depth, out, q) {
     const row = h("div", { class: cls, role: "treeitem", dataset: { id: r.id },
       style: `padding-left:${20 + depth * 14}px`, title: runTooltip(r) });
     row.append(h("span", { class: `pill ${r.kind === "HT" ? "ht" : "lt"}` }, r.kind));
-    const nm = h("span", { class: "name" });
-    const label = L.basename(f.path).replace(/\.(cur|clw)$/i, "");
-    if (q) {
-      const i = label.toLowerCase().indexOf(q);
-      nm.innerHTML = i < 0 ? esc(label) : esc(label.slice(0, i)) + "<mark>" + esc(label.slice(i, i + q.length)) + "</mark>" + esc(label.slice(i + q.length));
-    } else nm.textContent = label;
-    row.append(nm);
+    const nt = r.out ? "" : noteOf(r);
+    row.append(withMatch(h("span", { class: nt ? "name has-note" : "name" }), L.basename(f.path).replace(/\.(cur|clw)$/i, ""), q));
+    // the specimen note, faded, right after the name
+    if (nt) row.append(withMatch(h("span", { class: "note-text", title: `Note for ${r.label.piece || r.stem}: ${nt}` }), nt, q));
     if (r.dry) row.append(h("span", { class: "pill dry", title: `Empty-holder run – smoothed (${describeSmoothing(r)}) and subtracted from the other runs` }, "EMPTY"));
     if (r.out) row.append(h("span", { class: "pill out", title: "Exported output" }, "OUT"));
-    if (r.curveIm && !f.im && !state.s.showIm) row.append(h("span", { class: "pill im", title: "Has an out-of-phase (_Im) file" }, "Im"));
+    if (r.curveIm && !f.im && !state.s.showIm) row.append(h("span", { class: "pill im", title: "Out-of-phase (imaginary, χ″) data merged in from the _Im file – shown by the Out-of-phase / Both views" }, "Im"));
     if (f.im) row.append(h("span", { class: "pill im" }, "_Im"));
     row.append(h("span", { class: "meta" }, fmtShort(r.time)));
     row.addEventListener("click", (e) => clickRun(r.id, e));
@@ -394,11 +572,20 @@ function emit(v, depth, out, q) {
   }
 }
 
+/** el holding text, with the first occurrence of q marked */
+function withMatch(el, text, q) {
+  const i = q ? text.toLowerCase().indexOf(q) : -1;
+  if (i < 0) el.textContent = text;
+  else el.innerHTML = esc(text.slice(0, i)) + "<mark>" + esc(text.slice(i, i + q.length)) + "</mark>" + esc(text.slice(i + q.length));
+  return el;
+}
+
 function runTooltip(r) {
   const lines = [L.basename(r.main)];
   if (r.time) lines.push(`Measured ${fmtDateTime(r.time)}`);
   if (r.record && r.record.note) lines.push(`Instrument note: ${r.record.note}`);
   if (r.dry) lines.push(`Empty holder – ${describeSmoothing(r)}, used to correct the other runs`);
+  if (r.curveIm) lines.push("Out-of-phase (_Im) data merged in");
   return lines.join("\n");
 }
 
@@ -733,16 +920,34 @@ function drawPlot(runs, exportTheme) {
             line: { color: theme.text, width: 1, dash: "dot" }, yaxis, hovertemplate: hover, legendgroup: group }, g4, full(g4));
         }
       }
-      // paramagnetic (Curie-Weiss) reference through chi near room temperature
+      // paramagnetic fit chi0 + C/(T - theta): solid over the fitted stretch, dashed where
+      // extrapolated; a ring where the heating curve leaves it
       if (s.para && comp === "in" && sr.corr && view !== "raw") {
-        const p = paraFor(sr.corr);
-        if (p && !p.invalid) {
-          const yv = view === "norm" ? p.y.map((v) => (v == null ? null : v / p.smax)) : view === "inverse" ? p.y.map((v) => (v ? 1 / v : null)) : p.y;
-          const gp = multi ? `paramagnetic (Curie–Weiss, θ = ${p.theta} K, each run scaled to its own χ)` : `paramagnetic (Curie–Weiss, θ = ${p.theta} K)`;
-          paraTargets.push({ run, color: theme.para, xs: p.x, ys: yv, yaxis, text: "paramagnetic", hover: gp });
-          addTrace({ x: p.x, y: yv, type: "scatter", mode: "lines", line: { color: theme.para, width: 2.2, dash: "longdash" }, yaxis, isPara: true,
-            hovertemplate: `<b>%{fullData.name}</b><br>T = %{x:.1f} °C<br>${view === "inverse" ? "1/χ" : view === "norm" ? "χ/χmax" : "χ"} = %{y:.${view === "norm" ? 3 : view === "inverse" ? 4 : 2}f}<extra></extra>`,
-            legendgroup: multi ? undefined : run.id + "para" }, gp, multi ? `${run.stem} – ${gp}` : gp);
+        const pi = paraInfo(run, res);
+        const c = pi && pi.active;
+        if (c) {
+          const smax = Math.max(...sr.corr.csusc);
+          const tf = (v) => (view === "norm" ? v / smax : view === "inverse" ? (Math.abs(v) < 1e-3 ? null : 1 / v) : v);
+          const line = (a, b, n) => Array.from({ length: n + 1 }, (_, i) => a + ((b - a) * i) / n);
+          const xa = line(Math.min(...sr.temp), Math.max(...sr.temp), 160), xf = line(c.lo, c.hi, 60);
+          const ya = xa.map((t) => tf(L.hyperbolaAt(c.fit, t))), yf = xf.map((t) => tf(L.hyperbolaAt(c.fit, t)));
+          const law = c.fit.theta ? `C/(T − ${c.fit.theta} K)` : "C/T";
+          const gp = `paramagnetic fit χ₀ + ${law}`;
+          const fullName = `${multi ? `${run.stem} – ` : ""}${gp}, ${pctText(c)} at ${fmtT(c.share.t)} °C`;
+          const hov = `<b>%{fullData.name}</b><br>T = %{x:.1f} °C<br>${view === "inverse" ? "1/χ" : view === "norm" ? "χ/χmax" : "χ"} = %{y:.${view === "norm" ? 3 : view === "inverse" ? 4 : 2}f}<extra></extra>`;
+          const grp = multi ? gp : run.id + "para";
+          addTrace({ x: xa, y: ya, type: "scatter", mode: "lines", line: { color: theme.para, width: 1.6, dash: "dash" }, yaxis, isPara: true,
+            hovertemplate: hov, legendgroup: grp }, gp, fullName);
+          addTrace({ x: xf, y: yf, type: "scatter", mode: "lines", line: { color: theme.para, width: 3 }, opacity: 0.85, yaxis, isPara: true,
+            hovertemplate: hov, legendgroup: grp, showlegend: false }, gp, `${fullName} (fitted stretch)`);
+          if (c.departure) {
+            const hi = sr.segment.map((g, i) => (g === "heating" ? i : -1)).filter((i) => i >= 0);
+            const k = hi[L.nearestIndex(hi.map((i) => sr.temp[i]), c.departure.t)];
+            traces.push({ x: [sr.temp[k]], y: [sr.y[k]], type: "scatter", mode: "markers", yaxis, isPara: true, showlegend: false,
+              marker: { symbol: "circle-open", size: 13, color: theme.para, line: { width: 2.2, color: theme.para } },
+              hovertemplate: `<b>${esc(multi ? run.stem + " – " : "")}leaves the hyperbola</b><br>T = %{x:.0f} °C, χ ${c.departure.dir > 0 ? "above" : "below"} it<extra></extra>` });
+          }
+          paraTargets.push({ run, color: theme.para, xs: xa, ys: ya, yaxis, text: `para ${pctText(c)}`, hover: fullName });
         }
       }
       // shade what lies outside the empty holder's temperature range (held, not interpolated)
@@ -758,12 +963,12 @@ function drawPlot(runs, exportTheme) {
     }
   });
   if (multi) annotations.push(...placeTags(tagTargets, tags, theme));
-  // label the paramagnetic line(s) where they are clear of the data curves and the file
-  // tags: one "paramagnetic" for a single run; in overlays every run has its own curve
-  // (scaled to its own chi near room temperature), so each gets "<tag> · para"
+  // label the paramagnetic fit(s) where they are clear of the data curves and the file
+  // tags: "para 61 %" for a single run; in overlays every run has its own fit, so each
+  // gets "<tag> · para 33 %"
   if (paraTargets.length) {
     const curves = traces.filter((t) => !t.isPara && t.visible !== "legendonly" && (t.yaxis || "y") === "y").map((t) => ({ xs: t.x, ys: t.y }));
-    if (multi) paraTargets.forEach((t) => { t.text = `${tags.get(t.run.id)} · para`; });
+    if (multi) paraTargets.forEach((t) => { t.text = `${tags.get(t.run.id)} · ${t.text}`; });
     annotations.push(...placeTags(paraTargets, tags, theme, { obstacles: curves, placed: annotations.filter((a) => a.showarrow), one: !multi }));
   }
 
@@ -825,15 +1030,22 @@ function plotGeom() {
   return { left: r.left + sz.l, top: r.top + sz.t, w: sz.w, h: sz.h, x: fl.xaxis.range.slice(), ys };
 }
 const guiRelayout = (update) => (Plotly._guiRelayout || Plotly.relayout)($("#plot"), update);
+const shownTraces = () => ($("#plot").data || []).filter((tr) => tr.visible !== false && tr.visible !== "legendonly");
 /** Zoom onto the data around temperature t: ±12 % of the plotted temperature span
  *  (at least ±15 °C), χ fitted to the visible curves inside that window. */
 function zoomToTemp(t) {
-  const gd = $("#plot");
-  const shown = (gd.data || []).filter((tr) => tr.visible !== false && tr.visible !== "legendonly");
-  const xs = shown.flatMap((tr) => tr.x);
+  const xs = shownTraces().flatMap((tr) => tr.x);
   if (!xs.length) return;
   const half = Math.max(15, (Math.max(...xs) - Math.min(...xs)) * 0.12);
-  const lo = t - half, hi = t + half;
+  zoomToRange(t - half, t + half, () => flashLine(t));
+}
+
+/** Zoom to temperatures lo..hi, χ fitted to the visible curves inside (only those passing
+ *  fitTo, when given and any do); then done(). */
+function zoomToRange(lo, hi, done, fitTo) {
+  let shown = shownTraces();
+  if (!shown.length) return;
+  if (fitTo && shown.some(fitTo)) shown = shown.filter(fitTo);
   const u = { "xaxis.range": [lo, hi] };
   for (const [ax, key] of [["y", "yaxis"], ["y2", "yaxis2"]]) {
     const ys = [];
@@ -845,7 +1057,7 @@ function zoomToTemp(t) {
     const a = Math.min(...ys), b = Math.max(...ys), pad = (b - a) * 0.08 || Math.abs(a) * 0.05 || 1;
     u[key + ".range"] = [a - pad, b + pad];
   }
-  Promise.resolve(guiRelayout(u)).then(() => requestAnimationFrame(() => flashLine(t)));
+  Promise.resolve(guiRelayout(u)).then(() => requestAnimationFrame(() => done && done()));
 }
 
 /** Briefly light up the vertical marker at temperature t in yellow, then fade it out
@@ -861,6 +1073,26 @@ function flashLine(t) {
   el.addEventListener("animationend", () => el.remove());
   wrap.append(el);
 }
+
+/** Shade the temperatures lo..hi on the plot (a paramagnetic stretch under the mouse);
+ *  a stretch outside the current view shows as a strip at that edge. flash: fade out. */
+function showBand(lo, hi, label, flash = false) {
+  const g = plotGeom();
+  if (!g) return;
+  const wrap = $(".plot-wrap"), wr = wrap.getBoundingClientRect();
+  const px = (t) => g.left + ((t - g.x[0]) / (g.x[1] - g.x[0])) * g.w;
+  let a = Math.min(px(lo), px(hi)), b = Math.max(px(lo), px(hi));
+  const side = b < g.left ? "left" : a > g.left + g.w ? "right" : null;
+  if (side) { a = side === "left" ? g.left : g.left + g.w - 7; b = a + 7; }
+  a = Math.max(a, g.left); b = Math.min(b, g.left + g.w);
+  hideBand();
+  const el = h("div", { class: `para-band${side ? ` off ${side}` : ""}${flash ? " flash" : ""}` },
+    h("span", {}, side === "left" ? `‹ ${label}` : side === "right" ? `${label} ›` : label));
+  Object.assign(el.style, { left: a - wr.left + "px", width: Math.max(2, b - a) + "px", top: g.top - wr.top + "px", height: g.h + "px" });
+  if (flash) el.addEventListener("animationend", () => el.remove());
+  wrap.append(el);
+}
+function hideBand() { $$(".plot-wrap .para-band").forEach((e) => e.remove()); }
 
 function resetZoom() {
   const gd = $("#plot");
@@ -942,9 +1174,11 @@ function wirePlotMouse() {
 function renderInspector(runs) {
   const ins = $("#inspector");
   ins.innerHTML = "";
+  hideBand();
   if (runs.length > 1) { ins.append(selectionCard(runs)); return; }
   const r = runs[0];
   if (r.dry) ins.append(dryCard(r)); else ins.append(correctionCard(r));
+  if (!r.out) ins.append(notesCard(r));
   if (state.s.para && !r.dry) ins.append(paraCard(r));
   ins.append(runCard(r));
   if (!r.dry && !r.out) ins.append(exportCard([r]));
@@ -1174,7 +1408,7 @@ function selectionCard(runs) {
     "Colours show the run type (heating dark red, warming dark blue, cooling dashed blue); the tags on the curves name the file. Click a name to open it alone."));
   const frag = document.createDocumentFragment();
   frag.append(card);
-  if (state.s.para) frag.append(paraCard(null));
+  if (state.s.para && runs.some((r) => !r.dry)) frag.append(paraOverlayCard(runs));
   const exp = runs.filter((r) => !r.dry && !r.out);
   if (exp.length) frag.append(exportCard(exp));
   return frag;
@@ -1446,13 +1680,16 @@ function wire() {
     } else openFolder(p);
   });
 
+  // unsaved notes go to disk when the window loses focus or closes
+  addEventListener("blur", flushNotes);
+  addEventListener("beforeunload", flushNotes);
   api.onFsChanged(debounce(() => { if (state.root && !state.loading) openFolder(state.root, { quiet: true }); }, 400));
 }
 
 (async function init() {
   const saved = await api.getSettings();
   state.s = { ...DEFAULTS, ...saved };
-  for (const k of ["overrides", "dryOverrides", "holderSmooth", "expanded", "lastSel"]) state.s[k] = { ...(saved[k] || {}) };
+  for (const k of ["overrides", "dryOverrides", "holderSmooth", "paraPick", "expanded", "lastSel"]) state.s[k] = { ...(saved[k] || {}) };
   document.documentElement.style.setProperty("--side-w", (state.s.sideW || 300) + "px");
   if (api.nativeFrame) document.documentElement.classList.add("native-frame");
   wire();
