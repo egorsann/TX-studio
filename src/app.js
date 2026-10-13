@@ -1120,19 +1120,44 @@ function drawPlot(runs, exportTheme) {
       }
       // features found in the curve: Hopkinson peaks (labelled) and steep changes, both
       // also targets for the jump arrows at the plot edges
-      if (comp === "in" && !sr.dry) {
+      // Hopkinson peaks show most clearly in the out-of-phase curve, so both components
+      // are searched; each is labelled on the curve that shows it
+      if (!sr.dry) {
         const base = sr.corr ? sr.corr.csusc : sr.raw || sr.y;
         const shown = (g) => !!s[g === "cooling" ? "cooling" : "heating"];
-        if (run.kind === "HT") for (const pk of L.hopkinsonPeaks(sr.temp, base, sr.segment)) {
-          if (!shown(pk.branch)) continue;
-          targets.push({ t: pk.t, label: "Hopkinson" });
-          const y = view === "raw" ? sr.raw[pk.i] : sr.y[pk.i];
-          if (view === "inverse" || y == null) continue;
-          annotations.push({ x: sr.temp[pk.i], y, xref: "x", yref: yaxis, text: "Hopkinson", showarrow: true, arrowhead: 0, arrowwidth: 1,
-            arrowcolor: pk.branch === "cooling" ? theme.cool : theme.heat, ax: 0, ay: -16, standoff: 2, font: { size: 9.5, color: theme.text2 },
-            bgcolor: theme.bg, borderpad: 1, hovertext: `Hopkinson peak at ${fmtT(pk.t)} °C (${pk.branch === "cooling" ? "cooling" : "heating"}): χ peaks just below a Curie point` });
+        // at the tip: the highest plotted point of that branch within 10 °C; heating's label
+        // leans left, cooling's right, so the two don't cover each other at one Curie point
+        const label = (pk, text, hovertext) => {
+          if (view === "inverse") return;
+          const ys = view === "raw" ? sr.raw : sr.y;
+          let k = -1;
+          sr.temp.forEach((t, i) => { if (sr.segment[i] === pk.branch && Math.abs(t - pk.t) <= 10 && ys[i] != null && (k < 0 || ys[i] > ys[k])) k = i; });
+          if (k < 0) return;
+          const cool = pk.branch === "cooling";
+          annotations.push({ x: sr.temp[k], y: ys[k], xref: "x", yref: yaxis, text, showarrow: true, arrowhead: 0, arrowwidth: 1,
+            arrowcolor: cool ? theme.cool : theme.heat, ax: cool ? 26 : -26, ay: -14, standoff: 2, font: { size: 9.5, color: theme.text2 },
+            bgcolor: theme.bg, borderpad: 1, hovertext });
+        };
+        // one label per Curie point: on cooling only where heating has no peak near it
+        // (a mineral that formed during the heating)
+        const once = (pks) => pks.filter((p) => shown(p.branch) &&
+          !(p.branch === "cooling" && shown("heating") && pks.some((q) => q.branch === "heating" && Math.abs(q.t - p.t) < 25)));
+        if (run.kind === "HT") {
+          const own = once(L.hopkinsonPeaks(sr.temp, base, sr.segment));
+          for (const pk of own) {
+            targets.push({ t: pk.t, label: "Hopkinson" });
+            label(pk, "Hopkinson", `Hopkinson peak at ${fmtT(pk.t)} °C (${comp === "out" ? "out-of-phase" : "in-phase"}, ${pk.branch}): χ peaks just below a Curie point`);
+          }
+          // in-phase alone: the peaks only the out-of-phase curve shows
+          if (comp === "in" && comps.length === 1 && res && res.cout) {
+            for (const pk of once(L.hopkinsonPeaks(res.cout.temp, res.cout.csusc, res.cout.segment))) {
+              if (own.some((o) => Math.abs(o.t - pk.t) < 25)) continue;
+              targets.push({ t: pk.t, label: "χ″ Hopkinson" });
+              label(pk, "χ″ Hopkinson", `The out-of-phase curve peaks at ${fmtT(pk.t)} °C (${pk.branch}) – a Hopkinson peak; E shows it`);
+            }
+          }
         }
-        for (const st of L.steepChanges(sr.temp, base, sr.segment)) {
+        if (comp === "in") for (const st of L.steepChanges(sr.temp, base, sr.segment)) {
           if (shown(st.branch)) targets.push({ t: st.t, label: st.dir < 0 ? "χ drop" : "χ rise" });
         }
       }

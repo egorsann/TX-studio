@@ -96,7 +96,9 @@ where its line is; clicking zooms onto the data there — the line flashes yello
 temperature stays in yellow on the axis until you move the plot. Double-click or Esc returns
 to the full curve.
 
-* **Hopkinson peaks** (χ peaking just below a Curie point) get a small label at the tip.
+* **Hopkinson peaks** (χ peaking just below a Curie point — clearest in the out-of-phase
+  curve) get a small label at the tip; in the in-phase view, a peak only χ″ shows is marked
+  *χ″ Hopkinson* (E switches to it).
 * Zoomed in, arrows at the plot edges name the next transition or curve feature beyond the
   view (Hopkinson peak, steepest χ drop / rise, where the curve leaves the paramagnetic
   hyperbola); click to jump there. Low-T plots always show **‹ Besnus 30–34 K** at the cold
