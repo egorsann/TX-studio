@@ -97,11 +97,11 @@ temperature stays in yellow on the axis until you move the plot. Double-click or
 to the full curve.
 
 * **Hopkinson peaks** (χ peaking just below the pyrrhotite or magnetite Curie point —
-  clearest in the out-of-phase curve) get a small label at the tip, naming the mineral; in the in-phase view, a peak only χ″ shows is marked
-  *χ″ Hopkinson* (E switches to it).
-* Zoomed in, arrows at the plot edges name the next transition or curve feature beyond the
-  view (Hopkinson peak, steepest χ drop / rise, where the curve leaves the paramagnetic
-  hyperbola); click to jump there. Low-T plots always show **‹ Besnus 30–34 K** at the cold
+  clearest in the out-of-phase curve) get a small label at the tip, naming the mineral; in
+  the in-phase view, a peak only χ″ shows is marked *χ″ Hopkinson* (E switches to it).
+* Zoomed in, arrows at the plot edges name the next transition beyond the view (Po, Mag,
+  Hem …), or a steep χ drop / rise or the curve leaving the paramagnetic hyperbola where no
+  transition is; click to jump there. Low-T plots always show **‹ Besnus 30–34 K** at the cold
   edge — pyrrhotite's transition lies below what the cryostat reaches.
 * **Alt** held over the plot: a faint line at the mouse reads the temperature and every
   curve's χ and measuring time there.

@@ -1166,14 +1166,12 @@ function drawPlot(runs, exportTheme) {
         if (run.kind === "HT") {
           const own = once(L.hopkinsonPeaks(sr.temp, base, sr.segment));
           for (const pk of own) {
-            targets.push({ t: pk.t, label: `Hopkinson ${pk.mineral}` });
             label(pk, `Hopkinson · ${pk.mineral}`, `Hopkinson peak at ${fmtT(pk.t)} °C (${comp === "out" ? "out-of-phase" : "in-phase"}, ${pk.branch}): χ peaks just below the ${pk.mineral === "Mag" ? "magnetite" : "pyrrhotite"} Curie point`);
           }
           // in-phase alone: the peaks only the out-of-phase curve shows
           if (comp === "in" && comps.length === 1 && res && res.cout) {
             for (const pk of once(L.hopkinsonPeaks(res.cout.temp, res.cout.csusc, res.cout.segment))) {
               if (own.some((o) => Math.abs(o.t - pk.t) < 25)) continue;
-              targets.push({ t: pk.t, label: `χ″ Hopkinson ${pk.mineral}` });
               label(pk, `χ″ Hopkinson · ${pk.mineral}`, `The out-of-phase curve peaks at ${fmtT(pk.t)} °C (${pk.branch}) – a Hopkinson peak of ${pk.mineral === "Mag" ? "magnetite" : "pyrrhotite"}; E shows it`);
             }
           }
@@ -1262,9 +1260,12 @@ function drawPlot(runs, exportTheme) {
     modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d", "toImage", "zoom2d", "pan2d"],
   });
   const gd = $("#plot");
-  // jump targets, nearest first per temperature (a feature within 6 °C of another is one target)
+  // jump targets: the transitions, and curve features that aren't one of them (a χ drop
+  // within 15 °C of "Mag" is the magnetite Curie point; features within 6 °C are one)
   const uniq = [];
-  for (const t of targets.sort((a, b) => (b.ref ? 1 : 0) - (a.ref ? 1 : 0))) if (!uniq.some((u) => Math.abs(u.t - t.t) < 6)) uniq.push(t);
+  for (const t of targets.sort((a, b) => (b.ref ? 1 : 0) - (a.ref ? 1 : 0))) {
+    if (!uniq.some((u) => Math.abs(u.t - t.t) < (u.ref && !t.ref ? 15 : 6))) uniq.push(t);
+  }
   gd._targets = uniq.sort((a, b) => a.t - b.t);
   gd._dataRange = Number.isFinite(xmin) ? [xmin, xmax] : null;
   $$(".plot-wrap .ref-temp, .plot-wrap .ref-preview").forEach((e) => e.remove());
