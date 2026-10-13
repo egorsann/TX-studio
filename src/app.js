@@ -1059,7 +1059,7 @@ function drawPlot(runs, exportTheme) {
           const ym = idx.map((i) => (sr.dry ? sr.y[i] : sr.raw[i]));
           const g1 = segName + compTag + (sr.dry ? " (measured)" : " (raw)");
           addTrace({ x: xs, y: ym, customdata: cd, type: "scatter", mode: sr.dry ? "markers" : s.markers ? "lines+markers" : "lines", isData: true,
-            line: { color, width: s.markers ? 1 : 1.6, dash }, marker: { color, size: s.markers && !sr.dry ? 6 : 4, opacity: sr.dry ? 0.55 : 1 },
+            line: { color, width: s.markers ? 1 : 1.6, dash }, marker: { color, symbol: "square", size: s.markers && !sr.dry ? 4.5 : 3, opacity: sr.dry ? 0.55 : 1 },
             yaxis, hovertemplate: hover, legendgroup: group }, g1, full(g1));
           if (multi && comp === labelComp && !sr.dry) tagTargets.push({ run, color, xs, ys: ym, yaxis });
           // … and what gets subtracted
@@ -1083,7 +1083,7 @@ function drawPlot(runs, exportTheme) {
         const yv = idx.map((i) => sr.y[i]);
         const g = segName + compTag + (sr.uncorrected ? " (uncorrected)" : "");
         addTrace({ x: xs, y: yv, customdata: cd, type: "scatter", mode: s.markers ? "lines+markers" : "lines", isData: true,
-          line: { color, width: s.markers ? (outBoth ? 0.8 : 1) : (outBoth ? 1.3 : 2), dash }, marker: { color, size: 6 },
+          line: { color, width: s.markers ? (outBoth ? 0.8 : 1) : (outBoth ? 1.3 : 2), dash }, marker: { color, symbol: "square", size: 4.5 },
           opacity: outBoth ? 0.75 : 1, yaxis, hovertemplate: hover, legendgroup: group }, g, full(g));
         if (multi && comp === labelComp) tagTargets.push({ run, color, xs, ys: yv, yaxis });
         if (s.stored && sr.stored && comp === "in") {
@@ -2101,7 +2101,7 @@ function wire() {
 
 (async function init() {
   const saved = await api.getSettings();
-  state.s = { ...DEFAULTS, ...saved };
+  state.s = { ...DEFAULTS, ...saved, model: false };      // the mineral model starts off every time
   for (const k of ["overrides", "dryOverrides", "holderSmooth", "paraPick", "modelProps", "modelShift", "expanded", "lastSel"]) state.s[k] = { ...(saved[k] || {}) };
   document.documentElement.style.setProperty("--side-w", (state.s.sideW || 300) + "px");
   if (api.nativeFrame) document.documentElement.classList.add("native-frame");
