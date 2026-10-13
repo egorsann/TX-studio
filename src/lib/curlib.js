@@ -33,6 +33,30 @@
     HT: [[320, "pyrrhotite Curie point", "Po"], [580, "magnetite Curie point", "Mag"], [675, "hematite Néel point", "Hem"]],
     LT: [[-153, "Verwey transition (magnetite)", "T<sub>V</sub>"], [-13, "Morin transition (hematite)", "T<sub>M</sub>"]],
   };
+  /** Transitions below what the instruments reach (liquid-nitrogen cryostat: about
+   *  -196 deg C), shown as markers at the cold edge: [from, to (deg C), description, label] */
+  const OFF_SCALE = {
+    LT: [[-243.15, -239.15, "Besnus transition (monoclinic pyrrhotite), 30–34 K – below the cryostat's range", "Besnus 30–34 K"]],
+  };
+
+  /** Paramagnetic and diamagnetic rock-forming minerals: volume susceptibility near room
+   *  temperature (x 10^-6 SI, typical values within the ranges of Hunt et al. 1995) and
+   *  Weiss temperature theta (K; 0 = Curie law, null = temperature-independent). */
+  const MINERALS = [
+    { id: "biotite", name: "Biotite", k: 1500, theta: 0 },
+    { id: "muscovite", name: "Muscovite", k: 150, theta: 0 },
+    { id: "amphibole", name: "Amphibole", k: 750, theta: 0 },
+    { id: "chlorite", name: "Chlorite", k: 600, theta: 0 },
+    { id: "garnet", name: "Garnet", k: 2700, theta: 0 },
+    { id: "pyroxene", name: "Pyroxene", k: 1000, theta: 0 },
+    { id: "siderite", name: "Siderite", k: 3000, theta: 0 },
+    { id: "pyrite", name: "Pyrite", k: 50, theta: 0 },
+    { id: "quartz", name: "Quartz", k: -14, theta: null },
+    { id: "feldspar", name: "Feldspars", k: -13, theta: null },
+    { id: "calcite", name: "Calcite", k: -12, theta: null },
+  ];
+  /** A granite (monzogranite) mode, vol %. */
+  const GRANITE = { quartz: 30, feldspar: 58, biotite: 7, muscovite: 3, amphibole: 1, chlorite: 1 };
 
   // ------------------------------------------------------------------ names
   function basename(p) { return p.replace(/[\\/]+$/, "").split(/[\\/]/).pop(); }
@@ -383,6 +407,116 @@
     return out;
   }
 
+  /** Susceptibility of a mineral mix at t (deg C): the sum of vol-fraction x chi, the
+   *  paramagnetic minerals following Curie-Weiss from their value at refT.
+   *  mix: [{ pct, k, theta }] (theta null: temperature-independent) */
+  function mixChi(mix, t, refT = 25) {
+    let s = 0;
+    for (const m of mix) {
+      const f = (m.pct || 0) / 100;
+      if (!f) continue;
+      if (m.theta == null || !(m.k > 0)) { s += f * m.k; continue; }
+      const d = t + 273.15 - m.theta;
+      s += d > 0.5 ? (f * m.k * (refT + 273.15 - m.theta)) / d : 0;
+    }
+    return s;
+  }
+
+  // ------------------------------------------------------------------ curve features
+  /** Each branch in temperature order, chi lightly smoothed (centred mean of 5). */
+  function branchesByT(temps, chis, segment) {
+    const out = [];
+    for (const branch of ["heating", "cooling"]) {
+      const idx = [];
+      for (let i = 0; i < temps.length; i++) if (segment[i] === branch && Number.isFinite(chis[i])) idx.push(i);
+      if (idx.length < 15) continue;
+      idx.sort((a, b) => temps[a] - temps[b]);
+      const raw = idx.map((i) => chis[i]);
+      const Y = raw.map((_, k) => {
+        const a = Math.max(0, k - 2), b = Math.min(raw.length - 1, k + 2);
+        let s = 0;
+        for (let j = a; j <= b; j++) s += raw[j];
+        return s / (b - a + 1);
+      });
+      out.push({ branch, idx, T: idx.map((i) => temps[i]), Y, sigma: noiseSigma(raw) });
+    }
+    return out;
+  }
+
+  /** Hopkinson peaks: a maximum of chi just below a Curie point -- above the curve 40-120
+   *  deg C colder by 4 % or more, and followed within 60 deg C by a drop to 60 % or less.
+   *  -> [{ t, chi, branch, i }] (i: index in the run) */
+  function hopkinsonPeaks(temps, chis, segment) {
+    const out = [];
+    for (const { branch, idx, T, Y, sigma } of branchesByT(temps, chis, segment)) {
+      let last = null;
+      for (let k = 0; k < T.length; k++) {
+        const t = T[k], y = Y[k];
+        if (!(y > 0)) continue;
+        let isMax = true, minAfter = Infinity, sum = 0, cnt = 0;
+        for (let j = 0; j < T.length; j++) {
+          const d = T[j] - t;
+          if (Math.abs(d) <= 15 && Y[j] > y) { isMax = false; break; }
+          if (d > 0 && d <= 60) minAfter = Math.min(minAfter, Y[j]);
+          if (d >= -120 && d <= -40) { sum += Y[j]; cnt++; }
+        }
+        if (!isMax || !(minAfter <= 0.6 * y) || cnt < 3) continue;
+        const base = sum / cnt;
+        if (!(y >= 1.04 * base && y - base >= 4 * sigma)) continue;
+        if (last && t - last.t < 15) continue;
+        last = { t, chi: chis[idx[k]], branch, i: idx[k] };
+        out.push(last);
+      }
+    }
+    return out;
+  }
+
+  /** Steepest changes of chi with temperature (Curie points, Verwey steps): the steepest
+   *  spot of each stretch where chi changes by 25 % or more within 30 deg C.
+   *  -> [{ t, branch, dir }] (dir -1: chi falls with rising temperature, +1: rises) */
+  function steepChanges(temps, chis, segment) {
+    const out = [];
+    for (const { branch, T, Y, sigma } of branchesByT(temps, chis, segment)) {
+      const at = (t) => {          // Y at temperature t (linear between neighbours)
+        let j = 0;
+        while (j < T.length - 1 && T[j + 1] < t) j++;
+        if (j >= T.length - 1 || T[j + 1] === T[j]) return Y[Math.min(j, Y.length - 1)];
+        const f = Math.max(0, Math.min(1, (t - T[j]) / (T[j + 1] - T[j])));
+        return Y[j] + f * (Y[j + 1] - Y[j]);
+      };
+      const scale = Math.max(...Y.map(Math.abs)) || 1;
+      const hits = [];
+      for (let k = 0; k < T.length; k++) {
+        const t = T[k];
+        if (t - 15 < T[0] || t + 15 > T[T.length - 1]) continue;
+        // the first 25 deg C a branch runs through are start-up (furnace / cryostat settling)
+        if (branch === "heating" ? t - T[0] < 25 : T[T.length - 1] - t < 25) continue;
+        const a = at(t - 15), b = at(t + 15), d = b - a;
+        if (Math.abs(d) >= 0.25 * Math.max(Math.abs(a), Math.abs(b)) && Math.abs(d) >= Math.max(6 * sigma, 0.08 * scale)) hits.push({ t, d });
+      }
+      // one per stretch of consecutive hits: the steepest
+      let group = [];
+      const flush = () => {
+        if (!group.length) return;
+        const best = group.reduce((p, q) => (Math.abs(q.d) > Math.abs(p.d) ? q : p));
+        out.push({ t: best.t, branch, dir: best.d < 0 ? -1 : 1 });
+        group = [];
+      };
+      for (const hgt of hits) {
+        if (group.length && (hgt.t - group[group.length - 1].t > 15 || Math.sign(hgt.d) !== Math.sign(group[0].d))) flush();
+        group.push(hgt);
+      }
+      flush();
+    }
+    return out;
+  }
+
+  /** Sort rank of a run code in experiment order: L1, H1, L2, H2, L3 ... (others last). */
+  function runRank(code) {
+    const m = /^([HL])(\d+)$/i.exec(code || "");
+    return m ? +m[2] * 2 + (m[1].toUpperCase() === "H" ? 1 : 0) : 1e6;
+  }
+
   /** The candidate to show by default: a low-T warming branch as a whole, the stretch a
    *  heating starts with (before the sample changes), else the longest stretch. */
   function defaultParaCandidate(cands) {
@@ -490,6 +624,17 @@
     };
   }
 
+  /** Correct a run: in-phase against the empty holder, out-of-phase (_Im) against the
+   *  empty holder's own _Im file -- never against its in-phase curve. cout is null when
+   *  either _Im file is missing. Both are smoothed the same way (see holderValues).
+   *  -> { cin, cout } */
+  function correctRun(curve, curveIm, holder, holderIm, smooth) {
+    return {
+      cin: correctCurve(curve, holder, smooth),
+      cout: curveIm && holderIm ? correctCurve(curveIm, holderIm, smooth) : null,
+    };
+  }
+
   /** Pick the dry run for a sample: same kind (HT/LT) and component, nearest in time
    *  (or latest at/before the sample with rule "preceding"). The holder trace drifts,
    *  so a February dry run is a poor baseline for a September sample. */
@@ -586,12 +731,13 @@
   }
 
   return {
-    COL, REF_LINES,
+    COL, REF_LINES, OFF_SCALE, MINERALS, GRANITE,
     basename, dirname, joinPath, extOf, stemOf, loose, isCurveFile, isRecordFile, kindOf, isIm, mainStem,
     parseCurve, parseRecord, findRecordPath, runId, groupRuns, looksLikeDryRun, runLabel, overlayTags,
     runningMean, holderValues, hasStoredSmoothing, storedSmoothingN, nearestIndex,
-    hyperbolaFit, hyperbolaAt, noiseSigma, paraCandidates, defaultParaCandidate,
-    segments, holderTrace, correctCurve, pairDryRun,
+    hyperbolaFit, hyperbolaAt, noiseSigma, paraCandidates, defaultParaCandidate, mixChi,
+    hopkinsonPeaks, steepChanges, runRank,
+    segments, holderTrace, correctCurve, correctRun, pairDryRun,
     writeCurve, runCsv, outputDir, notesPath, notesText, parseNotes, round,
   };
 });

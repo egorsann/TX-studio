@@ -77,6 +77,44 @@ test("paramagnetic candidates: low-T warming branch as a whole; flat curves give
   assert.equal(L.paraCandidates(synthRun(T, () => 50, 0.3)).length, 0, "temperature-independent chi is not paramagnetic");
 });
 
+test("Hopkinson peak and Curie drop found on a synthetic magnetite heating", () => {
+  // flat-ish chi rising into a peak at 570 deg C, then the Curie drop to ~0 by 600
+  const temps = [...ramp(30, 700, 3), ...ramp(697, 30, 3)];
+  const chi = (t, seg) => (seg === "cooling" ? 50 : t <= 570 ? 100 + (t > 450 ? (t - 450) * 0.25 : 0) : Math.max(2, 130 - (t - 570) * 4.5));
+  const corr = synthRun(temps, chi, 0.05);
+  const hp = L.hopkinsonPeaks(corr.temp, corr.csusc, corr.segment);
+  assert.equal(hp.length, 1);
+  assert.ok(hp[0].branch === "heating" && Math.abs(hp[0].t - 570) <= 6, `peak at ${hp[0].t}`);
+  const st = L.steepChanges(corr.temp, corr.csusc, corr.segment).filter((x) => x.branch === "heating");
+  assert.equal(st.length, 1);
+  assert.ok(st[0].dir === -1 && st[0].t > 570 && st[0].t < 600, `drop at ${st[0].t}`);
+  // a plain hyperbola has neither
+  const para = synthRun(temps, (t) => 1 + 900 / (t + 273.15));
+  assert.equal(L.hopkinsonPeaks(para.temp, para.csusc, para.segment).length, 0);
+  assert.equal(L.steepChanges(para.temp, para.csusc, para.segment).length, 0);
+});
+
+test("run order L1 H1 L2 H2; mineral mix follows Curie law, diamagnets stay constant", () => {
+  assert.deepEqual(["L2", "H1", "X", "L1", "H2"].sort((a, b) => L.runRank(a) - L.runRank(b)), ["L1", "H1", "L2", "H2", "X"]);
+  const mix = [{ pct: 10, k: 1000, theta: 0 }, { pct: 90, k: -14, theta: null }];
+  assert.ok(Math.abs(L.mixChi(mix, 25) - (100 - 12.6)) < 1e-9);
+  assert.ok(Math.abs(L.mixChi(mix, -196.15) - (100 * 298.15 / 77 - 12.6)) < 1e-6);
+  const granite = L.MINERALS.map((m) => ({ ...m, pct: L.GRANITE[m.id] || 0 }));
+  assert.equal(granite.reduce((a, m) => a + m.pct, 0), 100);
+  assert.ok(L.mixChi(granite, 25) > 50 && L.mixChi(granite, 25) < 200);
+});
+
+test("out-of-phase is corrected with the empty holder's own _Im file", () => {
+  const rows = (vals) => ({ rows: vals.map(([temp, tsusc]) => ({ temp, tsusc, csusc: 0, nsusc: 0, time: temp })) });
+  const T = ramp(30, 700, 10).concat(ramp(690, 30, 10));
+  const sample = rows(T.map((t) => [t, 5])), sampleIm = rows(T.map((t) => [t, 0.3]));
+  const holder = rows(T.map((t) => [t, -45])), holderIm = rows(T.map((t) => [t, -2]));
+  const { cin, cout } = L.correctRun(sample, sampleIm, holder, holderIm, { mode: "none" });
+  assert.ok(cin.csusc.every((v) => Math.abs(v - 50) < 1e-6), "in-phase minus the in-phase holder");
+  assert.ok(cout.csusc.every((v) => Math.abs(v - 2.3) < 1e-6), "out-of-phase minus the _Im holder");
+  assert.equal(L.correctRun(sample, sampleIm, holder, null, { mode: "none" }).cout, null, "no _Im holder: no out-of-phase correction");
+});
+
 test("fixed-width parse copes with touching columns", () => {
   const txt = "  TEMP    TSUSC     CSUSC NSUSC       BULKS    FERRT    FERRB   TIMERHOTSTUFF\n" +
               "  26.6    -43.7     -0.66-0.019         0.0      0.0      0.0      0      0.0\n";
@@ -102,6 +140,7 @@ function loadRuns() {
   const runs = L.groupRuns(files.filter(L.isCurveFile));
   for (const r of runs) {
     r.curve = L.parseCurve(fs.readFileSync(r.main, "latin1"));
+    r.curveIm = r.im ? L.parseCurve(fs.readFileSync(r.im, "latin1")) : null;
     const rp = L.findRecordPath(r.main, files);
     r.record = rp ? L.parseRecord(fs.readFileSync(rp, "latin1")) : null;
     r.time = r.record ? r.record.start : null;
@@ -144,6 +183,20 @@ test("correction agrees with the CSUSC stored in the files (same holder)", { ski
     if (!h) continue;
     const corr = L.correctCurve(s.curve, h.curve, { mode: "stored" });
     assert.ok(corr.stats.compare.mean < 0.07, `${path.basename(s.main)} mean ${corr.stats.compare.mean}`);
+    n++;
+  }
+  assert.ok(n >= 1, `checked ${n}`);
+});
+
+test("out-of-phase correction (against the holder's _Im) agrees with the CSUSC stored in the _Im files", { skip: !HAVE }, () => {
+  const runs = loadRuns();
+  const dry = runs.filter((r) => r.dry && r.curveIm);
+  let n = 0;
+  for (const s of runs.filter((r) => !r.dry && r.curveIm && r.curve.emptyTag && L.hasStoredSmoothing(r.curveIm.rows))) {
+    const h = dry.find((d) => d.kind === s.kind && d.stem.slice(-9).toUpperCase() === s.curve.emptyTag.toUpperCase());
+    if (!h) continue;
+    const { cout } = L.correctRun(s.curve, s.curveIm, h.curve, h.curveIm, { mode: "stored" });
+    assert.ok(cout.stats.compare.mean < 0.07, `${path.basename(s.im)} mean ${cout.stats.compare.mean}`);
     n++;
   }
   assert.ok(n >= 1, `checked ${n}`);

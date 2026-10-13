@@ -41,13 +41,15 @@ cryostat (`.clw`) — with the measurement date from the instrument record (`.KH
 
 * An `_Im` file — the out-of-phase ("imaginary", χ″) susceptibility — is merged into its run
   (`Im` badge); the *Out-of-phase* and *Both* views plot it.
-* Files stay in alphabetical order; the runs of one piece (`27H1`, `27L1`, `27L2`) share a
-  faint background band, like Finder's row stripes.
-* **Notes** classify a piece at a glance: type them in the inspector (or click a tag —
-  paramagnetic, magnetite, hematite, pyrrhotite, …) and they show faded after the name of
-  every run of that piece. The filter box searches them too. They are kept in a small
-  `<specimen>_notes.json` beside the raw folder (`AB24CD101_TX/AB24CD101_TX_notes.json`),
-  so they travel with the data to other PCs.
+* Pieces are listed alphabetically; the runs of one piece appear in the order they were
+  measured — `27L1`, `27H1`, `27L2` — and share a faint background band, like Finder's
+  row stripes. Runs whose names don't follow the scheme are grouped by the day they were
+  measured; the **Empty holders** panel is banded by measuring day too.
+* **Notes** classify each run at a glance: type them in the inspector, items separated by
+  `;` (or click a tag — paramagnetic, magnetite, hematite, pyrrhotite, Verwey, Morin, …).
+  They show faded after the run's name; **Alt + hover** lists them one item per line. The
+  filter box searches them too. They are kept in a small `<specimen>_notes.json` beside the
+  raw folder (`AB24CD101_TX/AB24CD101_TX_notes.json`), so they travel with the data.
 * The folder that holds the runs is bold; single-child folders are compacted
   (`AB24CD101_TX / AB24CD101_TX_raw`); exported `_corr` folders are hidden (filter menu).
 * ↑/↓ flips through runs, Ctrl/Shift-click overlays several, type to filter.
@@ -86,16 +88,29 @@ mean** over N points, the smoothing already stored in the file (**From file**), 
 
 ### Transition labels: click to zoom
 
-![Clicking "Mag" zooms onto the 580 °C magnetite Curie point and flashes its line yellow](docs/screenshots/transition-zoom.png)
+![Clicking "Mag" zooms onto the 580 °C magnetite Curie point: its line flashes, the temperature stays in yellow, arrows name the next targets, and the Hopkinson peak is labelled](docs/screenshots/transition-zoom.png)
 
 Po, Mag, Hem (pyrrhotite, magnetite, hematite) for high-T runs and T<sub>V</sub>, T<sub>M</sub>
-(Verwey, Morin) for low-T runs sit as small labels above the plot. Click one to zoom onto the
-data at that temperature — its line flashes yellow; double-click or Esc returns to the full curve.
+(Verwey, Morin) for low-T runs sit as small labels above the plot. Hovering one shows faintly
+where its line is; clicking zooms onto the data there — the line flashes yellow and its
+temperature stays in yellow on the axis until you move the plot. Double-click or Esc returns
+to the full curve.
+
+* **Hopkinson peaks** (χ peaking just below a Curie point) get a small label at the tip.
+* Zoomed in, arrows at the plot edges name the next transition or curve feature beyond the
+  view (Hopkinson peak, steepest χ drop / rise, where the curve leaves the paramagnetic
+  hyperbola); click to jump there. Low-T plots always show **‹ Besnus 30–34 K** at the cold
+  edge — pyrrhotite's transition lies below what the cryostat reaches.
+* **Alt** held over the plot: a faint line at the mouse reads the temperature and every
+  curve's χ and measuring time there.
 
 **Mouse:** right-drag = zoom box (a flat box zooms temperature only, a narrow one χ only),
 left- or middle-drag = pan, wheel = zoom. Views: corrected, raw vs empty holder,
-normalised, 1/χ — in-phase, out-of-phase or both. Heating is dark red, low-T warming dark
-blue, cooling a dashed brighter blue. *PNG* saves a white-background figure.
+normalised, 1/χ — in-phase, out-of-phase (button outlined red) or both (χ″ on the right
+axis, both zero lines at the same height); **E** switches in-phase ↔ out-of-phase,
+Shift+E both, and switching keeps the zoom. Heating is dark red, low-T warming dark blue,
+cooling a dashed brighter blue; *Points* shows the measurements. *PNG* saves a
+white-background figure.
 
 ### Overlays
 
@@ -123,6 +138,12 @@ uncertainty). Only for **L1** and the **heating of H1**: after heating, magnetit
   warming branch). **Hover** one to shade it on the plot, **click** it to use it and zoom there.
 * The fit is drawn solid over the fitted stretch and dashed where extrapolated, labelled
   "para 61 %"; θ is adjustable (default 0 K = Curie law). In overlays each run has its own fit.
+* **Mineral model:** the susceptibility a mineral mode would have — a granite by default
+  (quartz, feldspars, biotite, muscovite, amphibole, chlorite), each mineral with a typical
+  mean χ and a Weiss temperature, all editable — drawn as a dotted curve. Its absolute level
+  is unknown for a furnace or cryostat sample, so a slider moves it up and down and
+  **Auto-fit** matches it to the measured χ over the active stretch; the card shows how much
+  of the measured χ its paramagnetic minerals would explain.
 
 ### Export
 

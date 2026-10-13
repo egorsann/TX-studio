@@ -30,7 +30,7 @@ namespace TXStudio
 {
     static class Program
     {
-        public const string Version = "0.6.0.0";
+        public const string Version = "0.7.0.0";
 
         [STAThread]
         static void Main(string[] args)
@@ -372,6 +372,15 @@ namespace TXStudio
                 throw new UnauthorizedAccessException("refusing to write outside a *_corr folder: " + p);
             Directory.CreateDirectory(Path.GetDirectoryName(full));
             File.WriteAllBytes(full, bytes);
+        }
+
+        // A lone Alt (held to read values on the plot) would otherwise put the window into
+        // menu mode, so the next arrow key opened the system menu. Alt+Space still works.
+        protected override void WndProc(ref Message m)
+        {
+            const int WM_SYSCOMMAND = 0x0112, SC_KEYMENU = 0xF100;
+            if (m.Msg == WM_SYSCOMMAND && ((int)m.WParam & 0xFFF0) == SC_KEYMENU && m.LParam == IntPtr.Zero) return;
+            base.WndProc(ref m);
         }
 
         string StartupPath()

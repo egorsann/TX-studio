@@ -17,6 +17,8 @@
   --warm: #1e3a8a;
   --cool: #2b8cee;
   --para: #7c3aed;
+  --model: #0f766e;
+  --zero: #1c2027;
   --ht: #c2410c;
   --ht-soft: #fdebe1;
   --lt: #0369a1;
@@ -52,6 +54,8 @@
   --warm: #5470e6;
   --cool: #5cc8ff;
   --para: #b197fc;
+  --model: #2dd4bf;
+  --zero: #f1f3f5;
   --ht: #fb923c;
   --ht-soft: #3a2316;
   --lt: #38bdf8;
@@ -216,6 +220,8 @@ button:disabled { opacity: .45; cursor: default; }
 .seg button:hover:not(:disabled) { color: var(--text); }
 .seg.seg-sm button { padding: 3px 9px; font-size: 12px; }
 .seg button.on { background: var(--bg); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); font-weight: 600; }
+/* out-of-phase showing: a red outline, so it isn't read as in-phase by mistake */
+#segComp button.on[data-c="out"] { box-shadow: inset 0 0 0 1.5px var(--bad), 0 1px 2px rgba(0, 0, 0, .12); color: var(--bad); }
 .chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .chip {
   display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px;
@@ -402,3 +408,50 @@ select:focus, .num input:focus { outline: 0; border-color: var(--accent); box-sh
 .modal-paths { max-height: 140px; overflow: auto; background: var(--bg-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin-bottom: 14px; }
 .modal .btn-row { justify-content: flex-end; }
 .modal .btn { flex: 0 0 auto; min-width: 96px; }
+
+/* ---------------------------------------------------------------- plot overlays */
+.ref-temp {
+  position: absolute; z-index: 4; transform: translateX(-50%); pointer-events: none; white-space: nowrap;
+  background: #facc15; color: #1c2027; font-size: 11px; font-weight: 650; line-height: 17px; padding: 0 6px; border-radius: 4px;
+  font-variant-numeric: tabular-nums; box-shadow: 0 0 8px 1px rgba(250, 204, 21, .45);
+}
+.ref-preview { position: absolute; z-index: 2; width: 3px; border-radius: 2px; pointer-events: none; background: rgba(250, 204, 21, .32); }
+.jump {
+  position: absolute; z-index: 4; font: inherit; font-size: 11.5px; line-height: 18px; padding: 1px 8px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--bg); color: var(--text-2); white-space: nowrap; box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
+}
+.jump:hover { border-color: #facc15; color: var(--text); box-shadow: 0 0 0 2px rgba(250, 204, 21, .35); }
+.xhair { position: absolute; z-index: 3; width: 1px; pointer-events: none; background: color-mix(in srgb, var(--text) 28%, transparent); }
+.xhair-box {
+  position: absolute; z-index: 5; pointer-events: none; max-width: 460px; padding: 4px 8px; border-radius: 6px; font-size: 11.5px;
+  background: color-mix(in srgb, var(--bg) 92%, transparent); border: 1px solid var(--line-2); box-shadow: 0 2px 8px rgba(0, 0, 0, .12);
+  font-variant-numeric: tabular-nums;
+}
+.xhair-t { font-weight: 650; margin-bottom: 1px; }
+.xhair-row { display: flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--text-2); }
+.xhair-row b { color: var(--text); font-weight: 600; }
+.xhair-sw { width: 10px; height: 3px; border-radius: 2px; flex: none; }
+.xhair-name { overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+
+/* ---------------------------------------------------------------- notes (Alt + hover) */
+.note-peek {
+  position: fixed; z-index: 50; pointer-events: none; min-width: 180px; max-width: 460px; padding: 8px 12px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--line-2); box-shadow: var(--shadow); font-size: 12.5px;
+}
+.note-peek-head { font-size: 11.5px; font-weight: 650; color: var(--text-2); margin-bottom: 4px; }
+.note-peek-item { padding: 3px 0; }
+.note-peek-item + .note-peek-item { border-top: 1px solid var(--line); }
+
+/* ---------------------------------------------------------------- mineral model */
+.model-box { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.model-head { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.model-head input { accent-color: var(--model); margin: 0; }
+.model-row { display: flex; align-items: center; gap: 8px; }
+.model-slider { flex: 1; min-width: 0; accent-color: var(--model); }
+.model-val { color: var(--model); font-weight: 650; font-variant-numeric: tabular-nums; }
+.model-mode summary { cursor: pointer; font-size: 12px; color: var(--text-2); margin-top: 10px; }
+.model-table { display: grid; grid-template-columns: 1fr 56px 74px 50px; gap: 3px 6px; align-items: center; margin-top: 6px; font-size: 12px; }
+.model-table input {
+  width: 100%; box-sizing: border-box; height: 24px; padding: 0 4px; text-align: right; font: inherit; font-size: 12px;
+  color: var(--text); background: var(--bg); border: 1px solid var(--line-2); border-radius: 5px;
+}

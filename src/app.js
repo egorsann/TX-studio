@@ -45,6 +45,7 @@ const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = se
 const DEFAULTS = {
   smoothN: 5, rule: "nearest", view: "corrected", comp: "in",
   heating: true, cooling: true, markers: false, refs: true, stored: false, para: false, paraTheta: 0,
+  model: false, modelMix: null, modelProps: {}, modelY: {},
   onlyCurves: true, showCorr: false, showIm: false, theme: "system", sideW: 300, dryOpen: true,
   overrides: {}, dryOverrides: {}, holderSmooth: {}, paraPick: {}, expanded: {}, lastSel: {}, lastRoot: null,
 };
@@ -130,8 +131,9 @@ async function openFolder(root, { quiet = false } = {}) {
       if (r.external && !r.dry) continue;          // outside the folder: only empty holders matter
       state.runs.set(r.id, r);
     }
+    // newest measuring day first; high-T before low-T within a day
     state.dry = [...state.runs.values()].filter((r) => r.dry && !r.out)
-      .sort((a, b) => a.kind.localeCompare(b.kind) || (b.time || 0) - (a.time || 0));
+      .sort((a, b) => (dayOf(b.time) || 0) - (dayOf(a.time) || 0) || a.kind.localeCompare(b.kind) || (b.time || 0) - (a.time || 0));
     const notes = await loadNotes();
     if (stale()) return;
     state.notes = notes;
@@ -196,8 +198,7 @@ function correctionFor(run) {
   const pair = dryFor(run);
   if (!pair) return null;
   const spec = smoothFor(pair.dry);
-  const cin = L.correctCurve(run.curve, pair.dry.curve, spec);
-  const cout = run.curveIm && pair.dry.curveIm ? L.correctCurve(run.curveIm, pair.dry.curveIm, spec) : null;
+  const { cin, cout } = L.correctRun(run.curve, run.curveIm, pair.dry.curve, pair.dry.curveIm, spec);
   return { pair, cin, cout, spec };
 }
 
@@ -227,22 +228,38 @@ function setHolderSmooth(d, spec) {
 }
 
 // ====================================================================== specimen notes
-// One short note per specimen piece (27H1, 27L1 and 27L2 share one), kept in a small
-// <specimen>_notes.json beside the raw folder (see CurLib.notesPath), so it travels with
-// the data. A file of that name that is not a TX Studio notes file is never overwritten.
+// One note per run file (27H1, 27L1 and 27L2 each have their own), ;-separated items,
+// kept in a small <specimen>_notes.json beside the raw folder (see CurLib.notesPath), so it
+// travels with the data. A file of that name that is not a TX Studio notes file is never
+// overwritten.
 const pieceOf = (r) => (r.label.run ? `${r.label.spec}|${r.label.piece}`.toLowerCase() : null);
-const noteKey = (r) => (r.label.spec && r.label.run ? `${r.label.spec}-${r.label.piece}` : r.stem);
+const noteKey = (r) => r.stem;
 const notesFileFor = (r) => state.notes.get(L.notesPath(r.dir).toLowerCase());
 function noteOf(r) { const f = notesFileFor(r); return (f && f.notes[noteKey(r)]) || ""; }
+const noteItems = (text) => text.split(/\s*;\s*/).map((x) => x.trim()).filter(Boolean);
 
 async function loadNotes() {
-  const paths = [...new Map([...state.runs.values()].map((r) => { const p = L.notesPath(r.dir); return [p.toLowerCase(), p]; })).values()];
-  const texts = paths.length ? await api.readTexts(paths) : [];
+  const byPath = new Map();
+  for (const r of state.runs.values()) {
+    const p = L.notesPath(r.dir), k = p.toLowerCase();
+    if (!byPath.has(k)) byPath.set(k, { path: p, runs: [] });
+    byPath.get(k).runs.push(r);
+  }
+  const files = [...byPath.values()];
+  const texts = files.length ? await api.readTexts(files.map((f) => f.path)) : [];
   const m = new Map();
-  paths.forEach((p, i) => {
+  files.forEach(({ path: p, runs }, i) => {
     const old = state.notes.get(p.toLowerCase());
     if (old && old.dirty) { m.set(p.toLowerCase(), old); return; }       // edit not written yet
     const notes = texts[i] == null ? {} : L.parseNotes(texts[i]);
+    // notes of v0.6 were per piece ("AB24CD101-27"): each run of that piece starts with a copy
+    if (notes) for (const k of Object.keys(notes)) {
+      if (runs.some((r) => r.stem === k)) continue;
+      const piece = runs.filter((r) => r.label.spec && r.label.run && `${r.label.spec}-${r.label.piece}` === k);
+      if (!piece.length) continue;
+      for (const r of piece) if (!notes[r.stem]) notes[r.stem] = notes[k];
+      delete notes[k];
+    }
     m.set(p.toLowerCase(), { path: p, notes: notes || {}, foreign: texts[i] != null && !notes });
   });
   return m;
@@ -277,16 +294,15 @@ async function writeNotes(f) {
 }
 const flushNotes = () => { for (const f of state.notes.values()) if (f.dirty) writeNotes(f); };
 
-const NOTE_TAGS = ["paramagnetic", "magnetite", "hematite", "pyrrhotite", "goethite", "pyrite", "siderite", "alteration", "check"];
+const NOTE_TAGS = ["paramagnetic", "magnetite", "hematite", "pyrrhotite", "goethite", "pyrite", "siderite",
+  "Verwey", "Morin", "Besnus", "Hopkinson", "alteration", "check"];
 
 function notesCard(r) {
   const f = notesFileFor(r);
-  const sibs = [...state.runs.values()].filter((x) => !x.out && x.label.run && pieceOf(x) && pieceOf(x) === pieceOf(r))
-    .map((x) => x.label.run).sort();
   const card = h("div", { class: "card" }, h("h3", {}, h("span", { class: "grow" }, "Notes"),
-    h("span", { class: "delta" }, r.label.run ? `${r.label.piece}${sibs.length > 1 ? ` · ${sibs.join(", ")}` : ""}` : r.stem)));
+    h("span", { class: "delta" }, r.label.run ? `${r.label.piece} ${r.label.run}` : r.stem)));
   const ta = h("textarea", { rows: 2, class: "note-input", spellcheck: "false",
-    placeholder: "Classify this piece, e.g. paramagnetic; magnetite forms ≈ 400 °C" });
+    placeholder: "Classify this run, items separated by ;  e.g. paramagnetic; magnetite forms ≈ 400 °C" });
   ta.value = noteOf(r);
   const fit = () => { ta.style.height = "auto"; ta.style.height = Math.min(160, ta.scrollHeight + 2) + "px"; };
   ta.addEventListener("input", () => { setNote(r, ta.value); fit(); markTags(); });
@@ -299,8 +315,8 @@ function notesCard(r) {
   const markTags = () => { for (const b of tags.children) b.classList.toggle("on", has(b.textContent)); };
   for (const t of NOTE_TAGS) {
     tags.append(h("button", { class: "note-tag", title: `Add / remove “${t}”`, onclick: () => {
-      const parts = ta.value.split(/\s*;\s*/).map((x) => x.trim()).filter(Boolean);
-      const i = parts.findIndex((x) => x.toLowerCase() === t);
+      const parts = noteItems(ta.value);
+      const i = parts.findIndex((x) => x.toLowerCase() === t.toLowerCase());
       if (i >= 0) parts.splice(i, 1);
       else if (has(t)) { toast(`“${t}” is already part of the note`); return; } else parts.push(t);
       ta.value = parts.join("; ");
@@ -310,7 +326,7 @@ function notesCard(r) {
   markTags();
   card.append(ta, tags);
   if (f && f.foreign) card.append(note("warn", `<code>${esc(L.basename(f.path))}</code> already exists and is not a TX Studio notes file, so notes are not saved there.`));
-  else if (f) card.append(h("div", { class: "delta", style: "margin-top:6px" }, h("span", {}, "Shown after the name in the sidebar · saved to "),
+  else if (f) card.append(h("div", { class: "delta", style: "margin-top:6px" }, h("span", {}, "Shown after the name in the sidebar (Alt + hover: one item per line) · saved to "),
     h("a", { class: "link", title: f.path, onclick: () => api.reveal(f.path) }, L.basename(f.path))));
   return card;
 }
@@ -352,6 +368,41 @@ function paraInfo(r, res = correctionFor(r)) {
   }
   active = active || def;
   return { cands, active, def };
+}
+
+// ---------------------------------------------------------------------- mineral model
+// The susceptibility a mineral mode (granite by default) would have, as a curve over
+// temperature (CurLib.mixChi); its absolute level is unknown for a furnace / cryostat sample,
+// so the curve's Y position is set by a slider or fitted to the measured χ.
+function mineralMix() {
+  const pct = state.s.modelMix || L.GRANITE, props = state.s.modelProps || {};
+  return L.MINERALS.map((m) => ({ ...m, ...(props[m.id] || {}), pct: pct[m.id] || 0 }));
+}
+const mixIsGranite = () => !state.s.modelMix && !Object.keys(state.s.modelProps || {}).length;
+
+/** χ at 25 °C of the model fitted (one scale factor, least squares) to the measured
+ *  heating curve over the stretch c. */
+function modelFitY25(corr, c) {
+  const mix = mineralMix(), m25 = L.mixChi(mix, 25);
+  let num = 0, den = 0;
+  for (let i = 0; i < corr.temp.length; i++) {
+    if (corr.segment[i] !== "heating" || corr.temp[i] < c.lo || corr.temp[i] > c.hi) continue;
+    const m = L.mixChi(mix, corr.temp[i]);
+    num += m * corr.csusc[i]; den += m * m;
+  }
+  return den > 0 && m25 ? (num / den) * m25 : null;
+}
+
+/** -> { y25, at(t), m25, para25, scale, fitted } for a run with paramagnetic stretch c. */
+function modelInfo(run, res, c) {
+  const mix = mineralMix(), m25 = L.mixChi(mix, 25);
+  if (!m25) return null;
+  const set = state.s.modelY[run.main];
+  const y25 = set != null ? set : modelFitY25(res.cin, c);
+  if (y25 == null) return null;
+  const scale = y25 / m25;
+  const para25 = L.mixChi(mix.filter((m) => m.theta != null && m.k > 0), 25);
+  return { y25, at: (t) => scale * L.mixChi(mix, t), m25, para25, scale, fitted: set == null, name: mixIsGranite() ? "granite" : "your mode" };
 }
 
 const fmtT = (t) => `${Math.round(t)}`.replace("-", "−");
@@ -435,8 +486,76 @@ function paraCard(r) {
       h("span", { class: "cand-what" }, k.whole ? "whole branch" : k.atStart ? "from the start" : ""),
       h("span", { class: "cand-pct" }, pctText(k))], k.lo, k.hi, rangeText(k), () => pickPara(r, k, pi)));
   }
-  card.append(list, thetaField());
+  card.append(list, modelSection(r, res, c), thetaField());
   return card;
+}
+
+let modelOpen = false;           // the mode table starts folded; stays as set while the app runs
+
+/** Mineral model block of the paramagnetic card: on / off, the Y slider (the model's χ at
+ *  25 °C), auto-fit over the active stretch, and the mode with each mineral's χ and θ. */
+function modelSection(r, res, c) {
+  const box = h("div", { class: "model-box" });
+  const on = h("input", { type: "checkbox", checked: !!state.s.model });
+  on.addEventListener("change", () => { saveSettings({ model: on.checked }); renderViewer(); });
+  box.append(h("label", { class: "model-head" }, on, h("span", {}, "Mineral model"),
+    h("span", { class: "delta" }, mixIsGranite() ? "· granite mode" : "· your mode")));
+  if (!state.s.model) return box;
+  const mi = modelInfo(r, res, c);
+  if (!mi) box.append(note("info", "This mode has no paramagnetic minerals – set some in the table below."));
+  else {
+    const top = Math.max(1, ...res.cin.csusc.filter(Number.isFinite).map(Math.abs)) * 2;
+    const sl = h("input", { type: "range", class: "model-slider", min: 0, max: top, step: top / 1000, value: mi.y25,
+      title: "Moves the model curve up or down: its χ at 25 °C" });
+    const val = h("span", { class: "model-val" }), info = h("div", { class: "delta", style: "margin-top:4px" });
+    const show = (y25, fitted) => {
+      const scale = y25 / mi.m25, para = scale * mi.para25, m = c.share.measured;
+      val.textContent = `${y25.toFixed(2)}${fitted ? " · fitted" : ""}`;
+      info.textContent = `Its paramagnetic minerals give χ ${para.toFixed(2)} at 25 °C` +
+        (m > 0 ? ` = ${Math.round((100 * para) / m)} % of the measured ${m.toFixed(2)} (${fmtT(c.share.t)} °C)` : "") +
+        ` · rock of this mode ${mi.m25.toFixed(0)} ×10⁻⁶ SI, scaled ×${scale.toPrecision(2)}`;
+    };
+    let raf = 0;
+    sl.addEventListener("input", () => {
+      state.s.modelY[r.main] = +sl.value;
+      show(+sl.value, false);
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => drawPlot(state.selected.map((id) => state.runs.get(id)).filter(Boolean)));
+      persist();
+    });
+    const fit = h("button", { class: "btn", title: "Fit the model's Y position to the measured χ over the active stretch (least squares)",
+      onclick: () => { delete state.s.modelY[r.main]; persist(); renderViewer(); } }, "Auto-fit");
+    show(mi.y25, mi.fitted);
+    box.append(h("div", { class: "field", style: "margin:8px 0 0" }, h("label", {}, "Y position – χ at 25 °C ", val),
+      h("div", { class: "model-row" }, sl, fit)), info);
+  }
+  // the mode: vol % per mineral, its room-temperature χ and Weiss temperature
+  const det = h("details", { class: "model-mode" });
+  det.open = modelOpen;
+  det.addEventListener("toggle", () => { modelOpen = det.open; });
+  const mix = mineralMix(), sum = mix.reduce((a, m) => a + (m.pct || 0), 0);
+  det.append(h("summary", {}, `Mode (vol %) · sum ${Math.round(sum)} %${Math.abs(sum - 100) > 0.5 ? " – not 100" : ""}`));
+  const tbl = h("div", { class: "model-table" }, h("span", { class: "delta" }, "Mineral"), h("span", { class: "delta" }, "vol %"),
+    h("span", { class: "delta" }, "χ ×10⁻⁶ SI"), h("span", { class: "delta" }, "θ (K)"));
+  const setMix = (id, key, v) => {
+    if (key === "pct") state.s.modelMix = { ...(state.s.modelMix || L.GRANITE), [id]: v };
+    else state.s.modelProps = { ...(state.s.modelProps || {}), [id]: { ...((state.s.modelProps || {})[id] || {}), [key]: v } };
+    persist(); renderViewer();
+  };
+  const num = (v, id, key, step) => {
+    const inp = h("input", { type: "number", step, value: v });
+    inp.addEventListener("change", () => setMix(id, key, Number(inp.value) || 0));
+    return inp;
+  };
+  for (const m of mix) {
+    tbl.append(h("span", {}, m.name), num(m.pct, m.id, "pct", 0.5), num(m.k, m.id, "k", 1),
+      m.theta == null ? h("span", { class: "delta" }, "–") : num(m.theta, m.id, "theta", 1));
+  }
+  det.append(tbl, h("div", { class: "delta", style: "margin-top:6px" },
+    "Typical mean χ of each mineral (not the deviatoric K′ of AMS); θ = 0 K follows the Curie law. ",
+    h("a", { class: "link", onclick: () => { state.s.modelMix = null; state.s.modelProps = {}; persist(); renderViewer(); } }, "Reset to granite")));
+  box.append(det);
+  return box;
 }
 
 /** Overlays: each run's fitted stretch and share; hover / click as on a single run. */
@@ -494,9 +613,19 @@ function viewNode(node, q) {
     }
   }
   if ((s.onlyCurves || q) && !count && node !== state.tree) return null;
-  if (!s.onlyCurves && !q && !count && !dirs.length && !others.length && node !== state.tree) return { node, dirs, files, others, count };
+  // the runs of one piece in experiment order (L1, H1, L2 ...), the pieces in their
+  // (alphabetical) order; runs whose names don't parse grouped by the day they were measured
+  const firstAt = new Map();
+  files.forEach((f, i) => { const g = groupOf(f.run); if (!firstAt.has(g)) firstAt.set(g, i); });
+  files.sort((a, b) => firstAt.get(groupOf(a.run)) - firstAt.get(groupOf(b.run))
+    || L.runRank(a.run.label.run) - L.runRank(b.run.label.run)
+    || (a.run.time || 0) - (b.run.time || 0) || a.im - b.im);
   return { node, dirs, files, others, count };
 }
+
+const dayOf = (t) => (t == null ? null : new Date(t).setHours(0, 0, 0, 0));
+/** Sidebar group of a run: its specimen piece, else the day it was measured. */
+const groupOf = (r) => pieceOf(r) || (r.time != null ? `day:${dayOf(r.time)}` : `id:${r.id.toLowerCase()}`);
 
 const runIdFor = (p) => L.runId(p);
 
@@ -534,11 +663,9 @@ function emit(v, depth, out, q) {
     out.append(row);
     if (open) emit(cur, depth + 1, out, q);
   }
-  // Runs of one specimen piece (27H1, 27L1, 27L2 ...) share a faint band; bands alternate
-  // per group like Finder's row stripes. Order stays alphabetical: a group is a stretch of
-  // consecutive rows with the same specimen + piece.
-  const groupKey = (r) => pieceOf(r) || r.id.toLowerCase();
-  const keys = v.files.map((f) => groupKey(f.run));
+  // Runs of one specimen piece (27L1, 27H1, 27L2 ...) share a faint band; bands alternate
+  // per group like Finder's row stripes (see viewNode for the order).
+  const keys = v.files.map((f) => groupOf(f.run));
   let band = -1;
   for (let fi = 0; fi < v.files.length; fi++) {
     const f = v.files[fi];
@@ -550,10 +677,13 @@ function emit(v, depth, out, q) {
     const row = h("div", { class: cls, role: "treeitem", dataset: { id: r.id },
       style: `padding-left:${20 + depth * 14}px`, title: runTooltip(r) });
     row.append(h("span", { class: `pill ${r.kind === "HT" ? "ht" : "lt"}` }, r.kind));
-    const nt = r.out ? "" : noteOf(r);
+    const nt = noteOf(r);
     row.append(withMatch(h("span", { class: nt ? "name has-note" : "name" }), L.basename(f.path).replace(/\.(cur|clw)$/i, ""), q));
-    // the specimen note, faded, right after the name
-    if (nt) row.append(withMatch(h("span", { class: "note-text", title: `Note for ${r.label.piece || r.stem}: ${nt}` }), nt, q));
+    // the run's note, faded, right after the name (Alt + hover: one item per line)
+    if (nt) row.append(withMatch(h("span", { class: "note-text" }), noteItems(nt).join(" · "), q));
+    row.addEventListener("mouseenter", (e) => { peek = { row, r }; if (e.altKey) showPeek(); });
+    row.addEventListener("mousemove", (e) => { if (e.altKey) { if (!$(".note-peek")) showPeek(); } else hidePeek(); });
+    row.addEventListener("mouseleave", () => { peek = null; hidePeek(); });
     if (r.dry) row.append(h("span", { class: "pill dry", title: `Empty-holder run – smoothed (${describeSmoothing(r)}) and subtracted from the other runs` }, "EMPTY"));
     if (r.out) row.append(h("span", { class: "pill out", title: "Exported output" }, "OUT"));
     if (r.curveIm && !f.im && !state.s.showIm) row.append(h("span", { class: "pill im", title: "Out-of-phase (imaginary, χ″) data merged in from the _Im file – shown by the Out-of-phase / Both views" }, "Im"));
@@ -571,6 +701,21 @@ function emit(v, depth, out, q) {
     out.append(row);
   }
 }
+
+// Alt + hover over a run: its notes, one item per line, in a panel right of the sidebar
+let peek = null;              // { row, r } under the mouse
+function showPeek() {
+  hidePeek();
+  if (!peek || !peek.row.isConnected) return;
+  const items = noteItems(noteOf(peek.r));
+  const el = h("div", { class: "note-peek" }, h("div", { class: "note-peek-head" }, peek.r.stem),
+    ...(items.length ? items.map((t) => h("div", { class: "note-peek-item" }, t)) : [h("div", { class: "delta" }, "No notes – add them in the inspector")]));
+  document.body.append(el);
+  const rr = peek.row.getBoundingClientRect(), side = $("#sidebar").getBoundingClientRect();
+  el.style.left = side.right + 8 + "px";
+  el.style.top = Math.max(8, Math.min(rr.top - 4, innerHeight - el.offsetHeight - 8)) + "px";
+}
+function hidePeek() { $$(".note-peek").forEach((e) => e.remove()); }
 
 /** el holding text, with the first occurrence of q marked */
 function withMatch(el, text, q) {
@@ -637,9 +782,15 @@ function renderDryPanel() {
   if (!state.dry.length) {
     list.append(h("div", { class: "row muted", style: "padding-left:10px" }, "None found – right-click a run to mark it"));
   }
-  for (const d of state.dry) {
+  // empty holders measured on the same day share a band (Finder-style stripes)
+  const days = state.dry.map((d) => dayOf(d.time));
+  let band = -1;
+  state.dry.forEach((d, i) => {
+    if (i === 0 || days[i] !== days[i - 1]) band++;
+    const banded = band % 2 === 1, first = i === 0 || days[i] !== days[i - 1], last = i === days.length - 1 || days[i] !== days[i + 1];
     const used = samples().filter((r) => { const p = dryFor(r); return p && p.dry.id === d.id; }).length;
-    const row = h("div", { class: "row filerow", dataset: { id: d.id }, style: "padding-left:10px", title: `${d.main}\n${runTooltip(d)}` },
+    const cls = `row filerow${banded ? " band" : ""}${banded && first ? " band-first" : ""}${banded && last ? " band-last" : ""}`;
+    const row = h("div", { class: cls, dataset: { id: d.id }, style: "padding-left:10px", title: `${d.main}\n${runTooltip(d)}` },
       h("span", { class: `pill ${d.kind === "HT" ? "ht" : "lt"}` }, d.kind),
       h("span", { class: "name" }, d.stem),
       h("span", { class: "meta", title: `${describeSmoothing(d)} · used by ${used} run(s)` },
@@ -647,7 +798,7 @@ function renderDryPanel() {
     row.addEventListener("click", (e) => clickRun(d.id, e));
     row.addEventListener("contextmenu", (e) => runMenu(e, d));
     list.append(row);
-  }
+  });
   markSelection();
 }
 
@@ -733,6 +884,12 @@ function renderViewer() {
   for (const b of $$("#segView button")) b.classList.toggle("on", b.dataset.v === state.s.view);
   for (const b of $$("#segComp button")) b.classList.toggle("on", b.dataset.c === state.s.comp);
   for (const b of $$(".chips .chip")) b.classList.toggle("on", !!state.s[b.dataset.t]);
+  // high-T runs heat, low-T runs warm up
+  const hasHT = runs.some((r) => r.kind === "HT"), hasLT = runs.some((r) => r.kind === "LT");
+  const heatChip = $('.chip[data-t="heating"]');
+  heatChip.lastChild.textContent = hasHT && hasLT ? "Heating / warming" : hasLT ? "Warming" : "Heating";
+  heatChip.querySelector(".sw.heat").classList.toggle("hidden", !hasHT);
+  heatChip.querySelector(".sw.warm").classList.toggle("hidden", !hasLT);
   const anyIm = runs.some((r) => r.curveIm);
   $$("#segComp button").forEach((b) => { b.disabled = b.dataset.c !== "in" && !anyIm; });
   const anyStored = runs.some((r) => !r.dry && r.curve.rows.some((x) => Math.abs(x.csusc) > 5e-3));
@@ -836,6 +993,7 @@ function drawPlot(runs, exportTheme) {
   const theme = exportTheme || {
     text: cssVar("--text"), text2: cssVar("--text-2"), text3: cssVar("--text-3"), line: cssVar("--line"), line2: cssVar("--line-2"),
     bg: cssVar("--bg"), heat: cssVar("--heat"), warm: cssVar("--warm"), cool: cssVar("--cool"), para: cssVar("--para"), warnSoft: cssVar("--warn-soft"),
+    zero: cssVar("--zero"), model: cssVar("--model"),
   };
   const multi = runs.length > 1;
   const comps = s.comp === "both" ? ["in", "out"] : [s.comp];
@@ -848,7 +1006,7 @@ function drawPlot(runs, exportTheme) {
   // (see overlayLabels), and the legend lists the types, not the files.
   const tags = multi ? overlayLabels(runs) : null;
   const labelComp = comps[0];
-  const tagTargets = [], paraTargets = [];
+  const tagTargets = [], paraTargets = [], targets = [];
   const addTrace = (t, generic, full) => {
     t.name = generic;
     if (multi) {
@@ -857,6 +1015,7 @@ function drawPlot(runs, exportTheme) {
       legendSeen.add(generic);
     }
     t.hovertemplate = t.hovertemplate.replace("%{fullData.name}", esc(full).replace(/%/g, "%%"));
+    t.meta = full;
     traces.push(t);
   };
 
@@ -887,8 +1046,9 @@ function drawPlot(runs, exportTheme) {
           // the measured curve (sample or empty holder) …
           const ym = idx.map((i) => (sr.dry ? sr.y[i] : sr.raw[i]));
           const g1 = segName + compTag + (sr.dry ? " (measured)" : " (raw)");
-          addTrace({ x: xs, y: ym, customdata: cd, type: "scatter", mode: sr.dry ? "markers" : s.markers ? "lines+markers" : "lines",
-            line: { color, width: 1.6, dash }, marker: { color, size: 4, opacity: sr.dry ? 0.55 : 1 }, yaxis, hovertemplate: hover, legendgroup: group }, g1, full(g1));
+          addTrace({ x: xs, y: ym, customdata: cd, type: "scatter", mode: sr.dry ? "markers" : s.markers ? "lines+markers" : "lines", isData: true,
+            line: { color, width: s.markers ? 1 : 1.6, dash }, marker: { color, size: s.markers && !sr.dry ? 6 : 4, opacity: sr.dry ? 0.55 : 1 },
+            yaxis, hovertemplate: hover, legendgroup: group }, g1, full(g1));
           if (multi && comp === labelComp && !sr.dry) tagTargets.push({ run, color, xs, ys: ym, yaxis });
           // … and what gets subtracted
           const hy = sr.dry ? sr.smooth : sr.holder;
@@ -910,8 +1070,8 @@ function drawPlot(runs, exportTheme) {
         }
         const yv = idx.map((i) => sr.y[i]);
         const g = segName + compTag + (sr.uncorrected ? " (uncorrected)" : "");
-        addTrace({ x: xs, y: yv, customdata: cd, type: "scatter", mode: s.markers ? "lines+markers" : "lines",
-          line: { color, width: outBoth ? 1.3 : 2, dash }, marker: { color, size: 4 },
+        addTrace({ x: xs, y: yv, customdata: cd, type: "scatter", mode: s.markers ? "lines+markers" : "lines", isData: true,
+          line: { color, width: s.markers ? (outBoth ? 0.8 : 1) : (outBoth ? 1.3 : 2), dash }, marker: { color, size: 6 },
           opacity: outBoth ? 0.75 : 1, yaxis, hovertemplate: hover, legendgroup: group }, g, full(g));
         if (multi && comp === labelComp) tagTargets.push({ run, color, xs, ys: yv, yaxis });
         if (s.stored && sr.stored && comp === "in") {
@@ -948,6 +1108,32 @@ function drawPlot(runs, exportTheme) {
               hovertemplate: `<b>${esc(multi ? run.stem + " – " : "")}leaves the hyperbola</b><br>T = %{x:.0f} °C, χ ${c.departure.dir > 0 ? "above" : "below"} it<extra></extra>` });
           }
           paraTargets.push({ run, color: theme.para, xs: xa, ys: ya, yaxis, text: `para ${pctText(c)}`, hover: fullName });
+          if (c.departure) targets.push({ t: c.departure.t, label: "leaves hyperbola" });
+          // the mineral model: its paramagnetic curve, moved up / down with the Y slider
+          const mi = !multi && s.model ? modelInfo(run, res, c) : null;
+          if (mi) {
+            addTrace({ x: xa, y: xa.map((t) => tf(mi.at(t))), type: "scatter", mode: "lines", line: { color: theme.model, width: 2, dash: "dot" }, yaxis, isPara: true,
+              hovertemplate: hov, legendgroup: run.id + "model" }, "mineral model", `mineral model (${mi.name}), Y at 25 °C = ${mi.y25.toFixed(2)}`);
+            paraTargets.push({ run, color: theme.model, xs: xa, ys: xa.map((t) => tf(mi.at(t))), yaxis, text: `${mi.name} model`, hover: `mineral model (${mi.name})`, model: true });
+          }
+        }
+      }
+      // features found in the curve: Hopkinson peaks (labelled) and steep changes, both
+      // also targets for the jump arrows at the plot edges
+      if (comp === "in" && !sr.dry) {
+        const base = sr.corr ? sr.corr.csusc : sr.raw || sr.y;
+        const shown = (g) => !!s[g === "cooling" ? "cooling" : "heating"];
+        if (run.kind === "HT") for (const pk of L.hopkinsonPeaks(sr.temp, base, sr.segment)) {
+          if (!shown(pk.branch)) continue;
+          targets.push({ t: pk.t, label: "Hopkinson" });
+          const y = view === "raw" ? sr.raw[pk.i] : sr.y[pk.i];
+          if (view === "inverse" || y == null) continue;
+          annotations.push({ x: sr.temp[pk.i], y, xref: "x", yref: yaxis, text: "Hopkinson", showarrow: true, arrowhead: 0, arrowwidth: 1,
+            arrowcolor: pk.branch === "cooling" ? theme.cool : theme.heat, ax: 0, ay: -16, standoff: 2, font: { size: 9.5, color: theme.text2 },
+            bgcolor: theme.bg, borderpad: 1, hovertext: `Hopkinson peak at ${fmtT(pk.t)} °C (${pk.branch === "cooling" ? "cooling" : "heating"}): χ peaks just below a Curie point` });
+        }
+        for (const st of L.steepChanges(sr.temp, base, sr.segment)) {
+          if (shown(st.branch)) targets.push({ t: st.t, label: st.dir < 0 ? "χ drop" : "χ rise" });
         }
       }
       // shade what lies outside the empty holder's temperature range (held, not interpolated)
@@ -969,27 +1155,35 @@ function drawPlot(runs, exportTheme) {
   if (paraTargets.length) {
     const curves = traces.filter((t) => !t.isPara && t.visible !== "legendonly" && (t.yaxis || "y") === "y").map((t) => ({ xs: t.x, ys: t.y }));
     if (multi) paraTargets.forEach((t) => { t.text = `${tags.get(t.run.id)} · ${t.text}`; });
-    annotations.push(...placeTags(paraTargets, tags, theme, { obstacles: curves, placed: annotations.filter((a) => a.showarrow), one: !multi }));
+    const fits = paraTargets.filter((t) => !t.model), models = paraTargets.filter((t) => t.model);
+    annotations.push(...placeTags(fits, tags, theme, { obstacles: curves, placed: annotations.filter((a) => a.showarrow), one: !multi }));
+    if (models.length) annotations.push(...placeTags(models, tags, theme, { obstacles: curves, placed: annotations.filter((a) => a.showarrow), one: true }));
   }
 
   if (s.refs && Number.isFinite(xmin)) {
     // dotted line in the plot, a small clickable chip just above it (click = zoom there)
     for (const k of kinds) for (const [t, label, abbr] of L.REF_LINES[k] || []) {
       if (t < xmin || t > xmax) continue;
+      targets.push({ t, label: abbr.replace(/<sub>(.*?)<\/sub>/g, "$1"), ref: true });
       shapes.push({ type: "line", xref: "x", yref: "paper", x0: t, x1: t, y0: 0, y1: 1, line: { color: theme.text3, width: 1, dash: "dot" }, layer: "below" });
       annotations.push({ name: `ref:${t}`, x: t, y: 1, xref: "x", yref: "paper", yanchor: "bottom", yshift: 3, text: abbr,
         hovertext: `${label}, ${t} °C – click to zoom here`, showarrow: false, captureevents: !exportTheme,
         font: { size: 10.5, color: theme.text2 }, bgcolor: theme.bg, bordercolor: theme.line2, borderwidth: 1, borderpad: 2 });
     }
+    // transitions colder than the instrument reaches: an arrow at the cold edge
+    for (const k of kinds) for (const [a, b, label, abbr] of L.OFF_SCALE[k] || []) {
+      if (b < xmin) targets.push({ t: (a + b) / 2, label: abbr, off: true, title: label });
+    }
   }
 
   const yTitle = { corrected: "χ  (10⁻⁶ SI)", raw: "χ, uncorrected  (10⁻⁶ SI)", norm: "χ / χ<sub>max</sub>", inverse: "1/χ  (10⁶ SI⁻¹)" }[view];
-  const axis = { gridcolor: theme.line, zerolinecolor: theme.line2, linecolor: theme.line2, showline: true, ticks: "outside", tickcolor: theme.line2, ticklen: 4, automargin: true };
+  // a high-contrast zero line, so negative susceptibility stands out at once
+  const axis = { gridcolor: theme.line, zerolinecolor: theme.zero, zerolinewidth: 1, linecolor: theme.line2, showline: true, ticks: "outside", tickcolor: theme.line2, ticklen: 4, automargin: true };
   const layout = {
     paper_bgcolor: exportTheme ? theme.bg : "rgba(0,0,0,0)", plot_bgcolor: exportTheme ? theme.bg : "rgba(0,0,0,0)",
     font: { family: getComputedStyle(document.body).fontFamily, size: 12, color: theme.text },
     margin: { l: 70, r: hasY2 ? 70 : 34, t: exportTheme ? 64 : 26, b: 84 },
-    xaxis: { ...axis, title: { text: "Temperature (°C)", standoff: 8 } },
+    xaxis: { ...axis, zeroline: false, title: { text: "Temperature (°C)", standoff: 8 } },
     yaxis: { ...axis, title: { text: comps.length > 1 ? yTitle.replace("χ", "χ′") : s.comp === "out" ? yTitle.replace("χ", "χ″") : yTitle, standoff: 8 }, zeroline: view !== "norm" },
     legend: { orientation: "h", x: 0, xanchor: "left", y: 0, yref: "container", yanchor: "bottom", bgcolor: "rgba(0,0,0,0)", font: { size: 11.5 }, itemwidth: 36 },
     modebar: { bgcolor: "rgba(0,0,0,0)", color: theme.text3, activecolor: theme.text, orientation: "v" },
@@ -999,7 +1193,20 @@ function drawPlot(runs, exportTheme) {
     uirevision: state.selected.join("|") + view + s.comp,
     dragmode: "pan",
   };
-  if (hasY2) layout.yaxis2 = { ...axis, overlaying: "y", side: "right", showgrid: false, zeroline: false, title: { text: yTitle.replace("χ", "χ″"), standoff: 8 } };
+  if (hasY2) {
+    // out-of-phase on its own scale at the right; both zeros at the same height, so the
+    // curves don't seem to shift between the In-phase / Out-of-phase / Both views
+    layout.yaxis2 = { ...axis, overlaying: "y", side: "right", showgrid: false, zeroline: view !== "norm",
+      title: { text: yTitle.replace("χ", "χ″") + "  · right axis", standoff: 8 } };
+    const span = (ax) => {
+      const ys = traces.filter((t) => (t.yaxis || "y") === ax && t.visible !== "legendonly").flatMap((t) => t.y).filter((v) => v != null && Number.isFinite(v));
+      if (!ys.length) return null;
+      const a = Math.min(...ys), b = Math.max(...ys), pad = (b - a) * 0.06 || Math.abs(a) * 0.05 || 1;
+      return [a - pad, b + pad];
+    };
+    const r1 = span("y"), r2 = span("y2");
+    if (r1 && r2) [layout.yaxis.range, layout.yaxis2.range] = alignZeros(r1, r2);
+  }
   if (exportTheme) {
     layout.title = { text: runs.length === 1 ? runs[0].stem : runs.map((r) => r.stem).join(", "), x: 0.01, xanchor: "left", font: { size: 15 } };
     return { data: traces, layout };
@@ -1009,13 +1216,42 @@ function drawPlot(runs, exportTheme) {
     modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d", "toImage", "zoom2d", "pan2d"],
   });
   const gd = $("#plot");
+  // jump targets, nearest first per temperature (a feature within 6 °C of another is one target)
+  const uniq = [];
+  for (const t of targets.sort((a, b) => (b.ref ? 1 : 0) - (a.ref ? 1 : 0))) if (!uniq.some((u) => Math.abs(u.t - t.t) < 6)) uniq.push(t);
+  gd._targets = uniq.sort((a, b) => a.t - b.t);
+  gd._dataRange = Number.isFinite(xmin) ? [xmin, xmax] : null;
+  $$(".plot-wrap .ref-temp, .plot-wrap .ref-preview").forEach((e) => e.remove());
   if (!gd._refClicks) {
     gd._refClicks = true;
     gd.on("plotly_clickannotation", (ev) => {
       const name = ev.annotation && ev.annotation.name;
       if (name && name.startsWith("ref:")) zoomToTemp(+name.slice(4));
     });
+    // moving the plot clears the temperature label of the last jump
+    gd.on("plotly_relayout", () => { $$(".plot-wrap .ref-temp").forEach((e) => e.remove()); updateJumpers(); });
+    // hovering a transition label previews its line
+    gd.addEventListener("mouseover", (e) => {
+      const g = e.target.closest && e.target.closest(".annotation");
+      const a = g && (gd.layout.annotations || [])[+g.getAttribute("data-index")];
+      if (a && a.name && a.name.startsWith("ref:")) showRefPreview(+a.name.slice(4));
+    });
+    gd.addEventListener("mouseout", (e) => { if (e.target.closest && e.target.closest(".annotation")) $$(".plot-wrap .ref-preview").forEach((x) => x.remove()); });
   }
+  requestAnimationFrame(updateJumpers);
+}
+
+/** Two y ranges widened so that zero sits at the same height on both axes. */
+function alignZeros(r1, r2) {
+  const f = ([a, b]) => (a >= 0 ? 0 : b <= 0 ? 1 : -a / (b - a));     // zero's height, 0 = bottom
+  const F = Math.max(f(r1), f(r2));
+  const fit = ([a, b]) => {
+    if (F <= 0) return [Math.min(0, a), b];
+    if (F >= 1) return [a, Math.max(0, b)];
+    const top = Math.max(b, (-a * (1 - F)) / F);
+    return [(-F * top) / (1 - F), top];
+  };
+  return [fit(r1), fit(r2)];
 }
 
 // ====================================================================== plot mouse
@@ -1037,7 +1273,7 @@ function zoomToTemp(t) {
   const xs = shownTraces().flatMap((tr) => tr.x);
   if (!xs.length) return;
   const half = Math.max(15, (Math.max(...xs) - Math.min(...xs)) * 0.12);
-  zoomToRange(t - half, t + half, () => flashLine(t));
+  zoomToRange(t - half, t + half, () => { flashLine(t); markTemp(t); });
 }
 
 /** Zoom to temperatures lo..hi, χ fitted to the visible curves inside (only those passing
@@ -1057,7 +1293,73 @@ function zoomToRange(lo, hi, done, fitTo) {
     const a = Math.min(...ys), b = Math.max(...ys), pad = (b - a) * 0.08 || Math.abs(a) * 0.05 || 1;
     u[key + ".range"] = [a - pad, b + pad];
   }
+  if (u["yaxis.range"] && u["yaxis2.range"]) [u["yaxis.range"], u["yaxis2.range"]] = alignZeros(u["yaxis.range"], u["yaxis2.range"]);
   Promise.resolve(guiRelayout(u)).then(() => requestAnimationFrame(() => done && done()));
+}
+
+/** Pixel x of temperature t on the plot, relative to .plot-wrap (null outside the view). */
+function plotX(t) {
+  const g = plotGeom();
+  if (!g || t < Math.min(...g.x) || t > Math.max(...g.x)) return null;
+  const wr = $(".plot-wrap").getBoundingClientRect();
+  return { x: g.left + ((t - g.x[0]) / (g.x[1] - g.x[0])) * g.w - wr.left, top: g.top - wr.top, h: g.h };
+}
+
+/** The temperature of the transition / feature jumped to, in yellow on the temperature
+ *  axis; it stays until the plot is moved (see the plotly_relayout handler). */
+function markTemp(t) {
+  $$(".plot-wrap .ref-temp").forEach((e) => e.remove());
+  const p = plotX(t);
+  if (!p) return;
+  const el = h("div", { class: "ref-temp" }, `${fmtT(t)} °C`);
+  Object.assign(el.style, { left: p.x + "px", top: p.top + p.h - 21 + "px" });
+  $(".plot-wrap").append(el);
+}
+
+/** Faint yellow line where a hovered transition label would zoom to. */
+function showRefPreview(t) {
+  $$(".plot-wrap .ref-preview").forEach((e) => e.remove());
+  const p = plotX(t);
+  if (!p) return;
+  const el = h("div", { class: "ref-preview" });
+  Object.assign(el.style, { left: p.x - 1.5 + "px", top: p.top + "px", height: p.h + "px" });
+  $(".plot-wrap").append(el);
+}
+
+/** When the view doesn't show everything: an arrow at each edge naming the nearest
+ *  transition or curve feature beyond it (click = jump there). Transitions colder than
+ *  the instrument reaches (Besnus) always sit at the cold edge. */
+function updateJumpers() {
+  const gd = $("#plot"), wrap = $(".plot-wrap");
+  $$(".plot-wrap .jump").forEach((e) => e.remove());
+  const g = plotGeom(), all = gd._targets || [];
+  if (!g || !all.length || $("#viewer").classList.contains("hidden")) return;
+  const x0 = Math.min(...g.x), x1 = Math.max(...g.x), wr = wrap.getBoundingClientRect();
+  const left = all.filter((t) => t.t < x0 - 0.5).pop(), right = all.find((t) => t.t > x1 + 0.5);
+  for (const [t, side] of [[left, "left"], [right, "right"]]) {
+    if (!t) continue;
+    const label = t.off ? t.label : `${t.label} ${fmtT(t.t)} °C`;
+    const el = h("button", { class: `jump ${side}`, title: t.title || `Jump to ${t.label} at ${fmtT(t.t)} °C` },
+      side === "left" ? `‹ ${label}` : `${label} ›`);
+    el.addEventListener("click", () => {
+      if (!t.off) return zoomToTemp(t.t);
+      const r = gd._dataRange;              // off-scale: show the coldest part of the run
+      if (r) zoomToRange(r[0] - 3, r[0] + Math.max(30, (r[1] - r[0]) * 0.15), () => toast(t.title));
+    });
+    el.style.top = g.top - wr.top + 6 + "px";
+    if (side === "left") el.style.left = g.left - wr.left + 6 + "px";
+    else el.style.right = wr.right - (g.left + g.w) + 6 + "px";
+    wrap.append(el);
+  }
+}
+
+/** Run a view change keeping the temperature zoom (χ refitted to what is then visible). */
+function keepXZoom(change) {
+  const gd = $("#plot"), fl = gd._fullLayout;
+  const zoomed = fl && fl.xaxis && gd.layout && gd.layout.xaxis && gd.layout.xaxis.autorange === false;
+  const r = zoomed ? fl.xaxis.range.slice() : null;
+  change();
+  if (r) zoomToRange(Math.min(...r), Math.max(...r));
 }
 
 /** Briefly light up the vertical marker at temperature t in yellow, then fade it out
@@ -1100,6 +1402,56 @@ function resetZoom() {
   const u = { "xaxis.autorange": true, "yaxis.autorange": true };
   if (gd.layout.yaxis2) u["yaxis2.autorange"] = true;
   guiRelayout(u);
+}
+
+// Alt held over the plot: a faint vertical line at the mouse, with the temperature and the
+// χ and measuring time of every curve there, read out at the top (the axis is at the bottom)
+function wireCrosshair() {
+  const wrap = $(".plot-wrap");
+  const line = h("div", { class: "xhair hidden" }), box = h("div", { class: "xhair-box hidden" });
+  wrap.append(line, box);
+  let lastX = null;
+  const hide = () => { line.classList.add("hidden"); box.classList.add("hidden"); };
+  const show = (cx) => {
+    const g = plotGeom();
+    if (!g || $("#viewer").classList.contains("hidden") || cx < g.left || cx > g.left + g.w) return hide();
+    const wr = wrap.getBoundingClientRect();
+    const T = g.x[0] + ((cx - g.left) / g.w) * (g.x[1] - g.x[0]);
+    const dec = state.s.view === "norm" ? 3 : state.s.view === "inverse" ? 4 : 2;
+    const sym = state.s.view === "inverse" ? "1/χ" : state.s.view === "norm" ? "χ/χmax" : "χ";
+    box.innerHTML = "";
+    box.append(h("div", { class: "xhair-t" }, `${T.toFixed(1)} °C`));
+    for (const tr of shownTraces()) {
+      if (!tr.isData) continue;
+      for (let i = 0; i < tr.x.length - 1; i++) {        // first stretch of the curve spanning T
+        const a = tr.x[i], b = tr.x[i + 1];
+        if (a === b || (T - a) * (T - b) > 0 || tr.y[i] == null || tr.y[i + 1] == null) continue;
+        const f = (T - a) / (b - a), y = tr.y[i] + f * (tr.y[i + 1] - tr.y[i]);
+        const t = tr.customdata ? tr.customdata[i] + f * (tr.customdata[i + 1] - tr.customdata[i]) : null;
+        const sw = h("i", { class: "xhair-sw" });
+        sw.style.background = tr.line.color;
+        box.append(h("div", { class: "xhair-row" }, sw, h("span", { class: "xhair-name" }, tr.meta || tr.name),
+          h("b", {}, `${(tr.yaxis || "y") === "y2" ? sym.replace("χ", "χ″") : sym} ${y.toFixed(dec)}`), t == null ? "" : h("span", {}, `${t.toFixed(0)} min`)));
+        break;
+      }
+    }
+    const x = cx - wr.left;
+    Object.assign(line.style, { left: x + "px", top: g.top - wr.top + "px", height: g.h + "px" });
+    line.classList.remove("hidden"); box.classList.remove("hidden");
+    const bw = box.offsetWidth;
+    box.style.left = Math.max(g.left - wr.left, Math.min(x - bw / 2, g.left - wr.left + g.w - bw)) + "px";
+    box.style.top = g.top - wr.top + 4 + "px";
+  };
+  wrap.addEventListener("mousemove", (e) => { lastX = e.clientX; if (e.altKey) show(e.clientX); else hide(); });
+  wrap.addEventListener("mouseleave", () => { lastX = null; hide(); });
+  addEventListener("keydown", (e) => {
+    if (e.key !== "Alt") return;
+    e.preventDefault();                       // no menu activation from a lone Alt
+    if (lastX != null) show(lastX);
+    if (peek) showPeek();
+  });
+  addEventListener("keyup", (e) => { if (e.key === "Alt") { e.preventDefault(); hide(); hidePeek(); } });
+  addEventListener("blur", () => { hide(); hidePeek(); });
 }
 
 function wirePlotMouse() {
@@ -1544,7 +1896,7 @@ function sourcesText(base, items) {
 async function exportPng() {
   const runs = state.selected.map((id) => state.runs.get(id)).filter(Boolean);
   if (!runs.length) return;
-  const light = { text: "#1c2027", text2: "#5b6370", text3: "#8a919c", line: "#e3e6ea", line2: "#c9ced6", bg: "#ffffff", heat: "#9f1d22", warm: "#1e3a8a", cool: "#2b8cee", para: "#7c3aed", warnSoft: "#fff4e0" };
+  const light = { text: "#1c2027", text2: "#5b6370", text3: "#8a919c", line: "#e3e6ea", line2: "#c9ced6", bg: "#ffffff", heat: "#9f1d22", warm: "#1e3a8a", cool: "#2b8cee", para: "#7c3aed", warnSoft: "#fff4e0", zero: "#1c2027", model: "#0f766e" };
   const fig = drawPlot(runs, light);
   const name = (runs.length === 1 ? runs[0].stem : `${runs[0].stem}+${runs.length - 1}`) + `_${state.s.view}.png`;
   const target = await api.saveDialog({ title: "Save plot", defaultPath: L.joinPath(L.outputDir(runs[0].dir), name), filters: [{ name: "PNG image", extensions: ["png"] }] });
@@ -1583,6 +1935,13 @@ function applyTheme() {
   if (state.selected.length) renderViewer();
 }
 
+/** In-phase / out-of-phase / both, keeping the temperature zoom. */
+function setComp(c) {
+  const runs = state.selected.map((id) => state.runs.get(id)).filter(Boolean);
+  if (c !== "in" && !runs.some((r) => r.curveIm)) { toast("No out-of-phase (_Im) data for this run"); return; }
+  keepXZoom(() => { saveSettings({ comp: c }); renderViewer(); });
+}
+
 async function pickAndOpen() {
   const p = await api.pickFolder(state.root || undefined);
   if (p) openFolder(p);
@@ -1610,6 +1969,7 @@ function wire() {
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => state.s.theme === "system" && applyTheme());
   $("#btnPng").onclick = exportPng;
   wirePlotMouse();
+  wireCrosshair();
   $("#search").addEventListener("input", debounce(renderTree, 120));
   $("#search").addEventListener("keydown", (e) => {
     if (e.key === "Escape") { e.target.value = ""; renderTree(); }
@@ -1627,8 +1987,8 @@ function wire() {
   }
   $("#dryHead").onclick = () => { saveSettings({ dryOpen: !state.s.dryOpen }); $("#dryPanel").classList.toggle("open", state.s.dryOpen); };
 
-  $("#segView").onclick = (e) => { const b = e.target.closest("button"); if (b && !b.disabled) { saveSettings({ view: b.dataset.v }); renderViewer(); } };
-  $("#segComp").onclick = (e) => { const b = e.target.closest("button"); if (b && !b.disabled) { saveSettings({ comp: b.dataset.c }); renderViewer(); } };
+  $("#segView").onclick = (e) => { const b = e.target.closest("button"); if (b && !b.disabled) keepXZoom(() => { saveSettings({ view: b.dataset.v }); renderViewer(); }); };
+  $("#segComp").onclick = (e) => { const b = e.target.closest("button"); if (b && !b.disabled) setComp(b.dataset.c); };
   $(".chips").onclick = (e) => { const b = e.target.closest(".chip"); if (b) { saveSettings({ [b.dataset.t]: !state.s[b.dataset.t] }); renderViewer(); } };
 
   // keyboard
@@ -1650,6 +2010,10 @@ function wire() {
     if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); moveSelection(1, e.shiftKey); }
     if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); moveSelection(-1, e.shiftKey); }
     if (e.key === "a" && (e.ctrlKey || e.metaKey) && document.activeElement.id === "tree") { e.preventDefault(); select(state.visible.slice()); }
+    if (e.key.toLowerCase() === "e" && !e.ctrlKey && !e.metaKey && !e.altKey && state.selected.length) {
+      e.preventDefault();
+      setComp(e.shiftKey ? "both" : state.s.comp === "in" ? "out" : "in");
+    }
   });
 
   // sidebar splitter
@@ -1660,7 +2024,7 @@ function wire() {
     const up = () => { sp.classList.remove("drag"); removeEventListener("mousemove", move); removeEventListener("mouseup", up); persist(); };
     addEventListener("mousemove", move); addEventListener("mouseup", up);
   });
-  new ResizeObserver(debounce(() => { if (!$("#viewer").classList.contains("hidden")) Plotly.Plots.resize("plot"); }, 60)).observe($(".plot-wrap"));
+  new ResizeObserver(debounce(() => { if (!$("#viewer").classList.contains("hidden")) Promise.resolve(Plotly.Plots.resize("plot")).then(updateJumpers); }, 60)).observe($(".plot-wrap"));
 
   // drag & drop a folder (or a .cur/.clw file) onto the window
   let dragDepth = 0;
@@ -1689,7 +2053,7 @@ function wire() {
 (async function init() {
   const saved = await api.getSettings();
   state.s = { ...DEFAULTS, ...saved };
-  for (const k of ["overrides", "dryOverrides", "holderSmooth", "paraPick", "expanded", "lastSel"]) state.s[k] = { ...(saved[k] || {}) };
+  for (const k of ["overrides", "dryOverrides", "holderSmooth", "paraPick", "modelProps", "modelY", "expanded", "lastSel"]) state.s[k] = { ...(saved[k] || {}) };
   document.documentElement.style.setProperty("--side-w", (state.s.sideW || 300) + "px");
   if (api.nativeFrame) document.documentElement.classList.add("native-frame");
   wire();
