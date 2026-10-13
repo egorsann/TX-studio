@@ -13,5 +13,6 @@ Or just run it from here:
 If Windows says "Windows protected your PC":
   click "More info" -> "Run anyway" (the app is not code-signed).
 
-Requirements: Windows 10 or 11, 64-bit. Nothing else.
+Requirements: Windows 10 or 11, 64-bit, with the Microsoft Edge WebView2 Runtime
+(part of Windows 11 and of up-to-date Windows 10; the app offers the download if missing).
 Uninstall: "Uninstall TX Studio.cmd" in %LOCALAPPDATA%\Programs\TX Studio

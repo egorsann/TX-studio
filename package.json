@@ -1,12 +1,13 @@
 {
   "name": "tx-studio",
   "productName": "TX Studio",
-  "version": "0.4.4",
-  "description": "Thermomagnetic curve viewer with automatic dry-run (empty holder) correction for KLY5/MFK .cur/.clw files",
+  "version": "0.5.0",
+  "description": "Thermomagnetic curve viewer with automatic empty-holder correction for KLY5/MFK .cur/.clw files",
   "main": "main.js",
   "private": true,
   "scripts": {
     "start": "electron .",
+    "host": "node scripts/run-host.js",
     "test": "node --test test/*.test.js",
     "pack": "node scripts/pack.js"
   },
@@ -14,7 +15,7 @@
     "electron": "^44.7.0"
   },
   "dependencies": {
-    "plotly.js-dist-min": "^4.1.2"
+    "plotly.js-basic-dist-min": "^4.1.2"
   },
   "repository": {
     "type": "git",

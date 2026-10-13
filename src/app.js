@@ -1287,9 +1287,9 @@ function confirmDialog(title, body, paths, okLabel) {
 function sourcesText(base, items) {
   const pad = (s, n) => String(s).padEnd(n);
   const lines = [
-    `${base} – empty-holder correction (TX Studio, ${new Date().toISOString().slice(0, 16).replace("T", " ")})`,
+    `${base} - empty-holder correction (TX Studio, ${new Date().toISOString().slice(0, 16).replace("T", " ")})`,
     `pairing: ${state.s.rule === "nearest" ? "nearest in time" : "latest before the run"}`,
-    `CSUSC = TSUSC − smoothed empty holder at the same temperature (heating / cooling branches separate); NSUSC = CSUSC / max(CSUSC)`,
+    `CSUSC = TSUSC - smoothed empty holder at the same temperature (heating / cooling branches separate); NSUSC = CSUSC / max(CSUSC)`,
     "-".repeat(126),
     pad("run", 26) + pad("empty holder", 22) + pad("smoothing", 16) + pad("run date", 12) + pad("holder date", 12) + pad("gap", 8) + pad("Im", 5) + "notes",
   ];
@@ -1437,7 +1437,7 @@ function wire() {
     e.preventDefault(); dragDepth = 0; $("#dropOverlay").classList.add("hidden");
     const f = e.dataTransfer.files[0];
     if (!f) return;
-    const p = api.pathForFile(f);
+    const p = await api.pathForFile(f);
     if (!p) return;
     if (L.isCurveFile(p)) {
       await openFolder(L.dirname(p));
@@ -1454,6 +1454,7 @@ function wire() {
   state.s = { ...DEFAULTS, ...saved };
   for (const k of ["overrides", "dryOverrides", "holderSmooth", "expanded", "lastSel"]) state.s[k] = { ...(saved[k] || {}) };
   document.documentElement.style.setProperty("--side-w", (state.s.sideW || 300) + "px");
+  if (api.nativeFrame) document.documentElement.classList.add("native-frame");
   wire();
   applyTheme();
   renderViewer();

@@ -5,6 +5,7 @@ $ErrorActionPreference = "Stop"
 $exeName = "TX Studio.exe"
 $src = Split-Path -Parent $PSScriptRoot                  # the folder holding "TX Studio.exe"
 $dst = Join-Path $env:LOCALAPPDATA "Programs\TX Studio"
+$cache = Join-Path $env:LOCALAPPDATA "TX Studio"            # WebView2 cache (settings live in %APPDATA%)
 
 if (-not (Test-Path (Join-Path $src $exeName))) {
   throw "Run 'Install TX Studio.cmd' from the unzipped TX Studio folder (not from inside the zip)."
@@ -44,7 +45,7 @@ taskkill /im "TX Studio.exe" /f >nul 2>&1
 del "$($links[0])" >nul 2>&1
 del "$($links[1])" >nul 2>&1
 cd /d "%TEMP%"
-start "" powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep 2; Remove-Item -LiteralPath '$dst' -Recurse -Force"
+start "" powershell -NoProfile -WindowStyle Hidden -Command "Start-Sleep 2; Remove-Item -LiteralPath '$dst' -Recurse -Force; Remove-Item -LiteralPath '$cache' -Recurse -Force -ErrorAction SilentlyContinue"
 echo TX Studio removed. Your settings in %%APPDATA%%\TX Studio were kept.
 "@
 Set-Content -LiteralPath (Join-Path $dst "Uninstall TX Studio.cmd") -Value $un -Encoding ASCII

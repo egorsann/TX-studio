@@ -12,14 +12,16 @@ runs, look at the curves, and correct every run for the empty holder automatical
 ## Install on a Windows PC
 
 1. Download **[TX-Studio-win32-x64.zip](https://github.com/egorsann/TX-studio/releases/latest/download/TX-Studio-win32-x64.zip)**
-   (or pick a version under [Releases](https://github.com/egorsann/TX-studio/releases)).
+   (under 1 MB; or pick a version under [Releases](https://github.com/egorsann/TX-studio/releases)).
 2. Unzip it (right-click → *Extract All…*).
 3. Double-click **`Install TX Studio.cmd`** in the unzipped folder.
 
 That's it: TX Studio is copied to `%LOCALAPPDATA%\Programs\TX Studio`, gets a
 **TX Studio** shortcut in the Start Menu and on the Desktop, and starts. No admin rights.
 
-* Needs **Windows 10 or 11, 64-bit** — nothing else (no Node.js or Python).
+* Needs **Windows 10 or 11, 64-bit** — nothing else. The app shows its window through the
+  Microsoft Edge WebView2 runtime that is part of Windows 11 and current Windows 10 (if a PC
+  lacks it, the app offers the download).
 * If Windows shows *"Windows protected your PC"*: **More info → Run anyway** (the app
   isn't code-signed). Happens once.
 * **Update:** download the newer zip and run `Install TX Studio.cmd` again.
@@ -134,22 +136,28 @@ raw data can't be overwritten.
 
 ## Development
 
-Needs Node.js 22+.
+Needs Node.js 22+ on Windows.
 
 ```
 npm install
-npm start               # run from source (or double-click "TX Studio.cmd")
+npm run host            # build the Windows app and run it on the source tree
 npm test                # parser / smoothing / pairing / correction tests
 npm run pack            # dist\TX-Studio-win32-x64.zip with installer
+npm start               # alternative: run the UI in Electron (development only)
 node test/check_run.js <folder> <specimen prefix>   # corrections of one specimen vs stored / earlier CSVs
 ```
+
+The app is a ~40 KB Windows host (`host/TXStudio.cs`) that shows the web UI (`src/`) in the
+system's WebView2 runtime. It is compiled with the C# compiler that ships with .NET
+Framework 4.8 — no SDK to install; the three WebView2 SDK DLLs are fetched from NuGet
+(hash-checked) on the first build. `src/host-bridge.js` gives the UI file access, dialogs
+and settings through the host; Electron's `main.js` / `preload.js` do the same for `npm start`.
 
 Real-data tests run when `TX_TEST_DATA` (or a one-line `test/data-path.local`) points at a
 folder with `holder_corrections/` and `<SPEC>_TX/<SPEC>_TX_raw/` runs.
 
-`src/lib/curlib.js` holds all file handling and correction maths (no Electron
-dependency); `src/app.js` is the UI; `main.js` the window and file access;
-`scripts/` the packaging and installer. Screenshots in `docs/screenshots` use made-up
+`src/lib/curlib.js` holds all file handling and correction maths; `src/app.js` is the UI;
+`scripts/` the build, packaging and installer. Screenshots in `docs/screenshots` use made-up
 specimen IDs.
 
 To publish a new version: bump `version` in `package.json`, `npm run pack`, then

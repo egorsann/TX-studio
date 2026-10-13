@@ -93,6 +93,9 @@ button:disabled { opacity: .45; cursor: default; }
   -webkit-app-region: drag;
 }
 .titlebar button, .titlebar .crumb { -webkit-app-region: no-drag; }
+/* Windows host: normal title bar above, so no drag region and no space for window controls */
+.native-frame .titlebar { padding-right: 12px; -webkit-app-region: no-drag; }
+.native-frame .brand span { display: none; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; margin-right: 10px; }
 .logo { width: 20px; height: 20px; color: var(--accent); }
 .tb-btn {
