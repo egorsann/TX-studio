@@ -30,7 +30,7 @@ namespace TXStudio
 {
     static class Program
     {
-        public const string Version = "0.7.3.0";
+        public const string Version = "0.7.4.0";
 
         [STAThread]
         static void Main(string[] args)

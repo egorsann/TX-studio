@@ -1059,7 +1059,7 @@ function drawPlot(runs, exportTheme) {
           const ym = idx.map((i) => (sr.dry ? sr.y[i] : sr.raw[i]));
           const g1 = segName + compTag + (sr.dry ? " (measured)" : " (raw)");
           addTrace({ x: xs, y: ym, customdata: cd, type: "scatter", mode: sr.dry ? "markers" : s.markers ? "lines+markers" : "lines", isData: true,
-            line: { color, width: s.markers ? 1 : 1.6, dash }, marker: { color, symbol: "square", size: s.markers && !sr.dry ? 4.5 : 3, opacity: sr.dry ? 0.55 : 1 },
+            line: { color, width: s.markers ? 1 : 1.6, dash }, marker: { color, symbol: "square", size: s.markers && !sr.dry ? 4.5 : 3, opacity: sr.dry ? 0.55 : 1 }, baseSize: s.markers && !sr.dry ? 4.5 : 3,
             yaxis, hovertemplate: hover, legendgroup: group }, g1, full(g1));
           if (multi && comp === labelComp && !sr.dry) tagTargets.push({ run, color, xs, ys: ym, yaxis });
           // … and what gets subtracted
@@ -1083,7 +1083,7 @@ function drawPlot(runs, exportTheme) {
         const yv = idx.map((i) => sr.y[i]);
         const g = segName + compTag + (sr.uncorrected ? " (uncorrected)" : "");
         addTrace({ x: xs, y: yv, customdata: cd, type: "scatter", mode: s.markers ? "lines+markers" : "lines", isData: true,
-          line: { color, width: s.markers ? (outBoth ? 0.8 : 1) : (outBoth ? 1.3 : 2), dash }, marker: { color, symbol: "square", size: 4.5 },
+          line: { color, width: s.markers ? (outBoth ? 0.8 : 1) : (outBoth ? 1.3 : 2), dash }, marker: { color, symbol: "square", size: 4.5 }, baseSize: 4.5,
           opacity: outBoth ? 0.75 : 1, yaxis, hovertemplate: hover, legendgroup: group }, g, full(g));
         if (multi && comp === labelComp) tagTargets.push({ run, color, xs, ys: yv, yaxis });
         if (s.stored && sr.stored && comp === "in") {
@@ -1276,7 +1276,7 @@ function drawPlot(runs, exportTheme) {
       if (name && name.startsWith("ref:")) { $$(".plot-wrap .ref-preview").forEach((e) => e.remove()); zoomToTemp(+name.slice(4)); }
     });
     // moving the plot clears the temperature label of the last jump
-    gd.on("plotly_relayout", () => { $$(".plot-wrap .ref-temp, .plot-wrap .ref-preview").forEach((e) => e.remove()); updateJumpers(); });
+    gd.on("plotly_relayout", () => { $$(".plot-wrap .ref-temp, .plot-wrap .ref-preview").forEach((e) => e.remove()); updateJumpers(); updateMarkerSize(); });
     gd.on("plotly_relayouting", () => $$(".plot-wrap .ref-preview").forEach((e) => e.remove()));
     gd.addEventListener("mouseleave", () => $$(".plot-wrap .ref-preview").forEach((e) => e.remove()));
     // hovering a transition label previews its line
@@ -1287,7 +1287,25 @@ function drawPlot(runs, exportTheme) {
     });
     gd.addEventListener("mouseout", (e) => { if (e.target.closest && e.target.closest(".annotation")) $$(".plot-wrap .ref-preview").forEach((x) => x.remove()); });
   }
-  requestAnimationFrame(updateJumpers);
+  requestAnimationFrame(() => { updateJumpers(); updateMarkerSize(); });
+}
+
+/** Measurement points shrink as the view widens: full size zoomed in to a quarter of the
+ *  plotted temperature span or closer, half size at the full view, gradually (log scale). */
+function updateMarkerSize() {
+  const gd = $("#plot"), fl = gd._fullLayout, r = gd._dataRange;
+  if (!fl || !fl.xaxis || !r || !gd.data) return;
+  const vis = Math.abs(fl.xaxis.range[1] - fl.xaxis.range[0]), full = r[1] - r[0];
+  if (!(vis > 0 && full > 0)) return;
+  const zoom = Math.max(1, full / vis);                         // 1 = full view, 4 = a quarter of it
+  const f = Math.min(1, 0.5 + 0.25 * Math.log2(zoom));
+  const idx = [], sizes = [];
+  gd.data.forEach((t, i) => {
+    if (!t.baseSize) return;
+    const v = Math.round(t.baseSize * f * 20) / 20;
+    if (!t.marker || t.marker.size !== v) { idx.push(i); sizes.push(v); }
+  });
+  if (idx.length) Plotly.restyle(gd, { "marker.size": sizes }, idx);
 }
 
 /** Two y ranges widened so that zero sits at the same height on both axes. */
