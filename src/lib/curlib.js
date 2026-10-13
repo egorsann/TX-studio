@@ -39,24 +39,29 @@
     LT: [[-243.15, -239.15, "Besnus transition (monoclinic pyrrhotite), 30–34 K – below the cryostat's range", "Besnus 30–34 K"]],
   };
 
-  /** Paramagnetic and diamagnetic rock-forming minerals: volume susceptibility near room
-   *  temperature (x 10^-6 SI, typical values within the ranges of Hunt et al. 1995) and
-   *  Weiss temperature theta (K; 0 = Curie law, null = temperature-independent). */
+  /** Paramagnetic and diamagnetic rock-forming minerals: mean volume susceptibility near
+   *  room temperature (x 10^-6 SI) and Weiss temperature theta (K; 0 = Curie law, null =
+   *  temperature-independent). Paramagnetic values estimated from a typical FeO content
+   *  (k ~ density x 25.2 x wt% Fe2+, Rochette 1987), within the ranges of Hunt et al. 1995. */
   const MINERALS = [
-    { id: "biotite", name: "Biotite", k: 1500, theta: 0 },
-    { id: "muscovite", name: "Muscovite", k: 150, theta: 0 },
-    { id: "amphibole", name: "Amphibole", k: 750, theta: 0 },
-    { id: "chlorite", name: "Chlorite", k: 600, theta: 0 },
-    { id: "garnet", name: "Garnet", k: 2700, theta: 0 },
-    { id: "pyroxene", name: "Pyroxene", k: 1000, theta: 0 },
-    { id: "siderite", name: "Siderite", k: 3000, theta: 0 },
-    { id: "pyrite", name: "Pyrite", k: 50, theta: 0 },
-    { id: "quartz", name: "Quartz", k: -14, theta: null },
-    { id: "feldspar", name: "Feldspars", k: -13, theta: null },
-    { id: "calcite", name: "Calcite", k: -12, theta: null },
+    { id: "biotite", name: "Biotite", k: 1000, theta: 0, note: "≈ 16 wt% FeO" },
+    { id: "amphibole", name: "Hornblende", k: 850, theta: 0, note: "≈ 14 wt% FeO" },
+    { id: "chlorite", name: "Chlorite", k: 700, theta: 0, note: "≈ 13 wt% FeO" },
+    { id: "muscovite", name: "Muscovite / sericite", k: 120, theta: 0, note: "≈ 2 wt% FeO" },
+    { id: "pyroxene", name: "Pyroxene", k: 700, theta: 0, note: "augite, ≈ 10 wt% FeO" },
+    { id: "garnet", name: "Garnet", k: 2700, theta: 0, note: "almandine" },
+    { id: "siderite", name: "Siderite", k: 4000, theta: 0, note: "" },
+    { id: "pyrite", name: "Pyrite", k: 30, theta: 0, note: "low-spin Fe²⁺: nearly none" },
+    { id: "quartz", name: "Quartz", k: -14, theta: null, note: "diamagnetic" },
+    { id: "feldspar", name: "Feldspars", k: -13, theta: null, note: "diamagnetic" },
+    { id: "calcite", name: "Calcite", k: -12, theta: null, note: "diamagnetic" },
   ];
-  /** A granite (monzogranite) mode, vol %. */
-  const GRANITE = { quartz: 30, feldspar: 58, biotite: 7, muscovite: 3, amphibole: 1, chlorite: 1 };
+  /** A monzogranite mode (porphyry intrusion, I-type: biotite + hornblende), vol %. */
+  const MONZOGRANITE = { quartz: 30, feldspar: 60, biotite: 7, amphibole: 3 };
+
+  /** Where Hopkinson peaks are looked for: just below the Curie points of pyrrhotite
+   *  (~320-340 deg C) and magnetite (580 deg C). [from, to (deg C), mineral] */
+  const HOPKINSON_WINDOWS = [[250, 360, "Po"], [500, 600, "Mag"]];
 
   // ------------------------------------------------------------------ names
   function basename(p) { return p.replace(/[\\/]+$/, "").split(/[\\/]/).pop(); }
@@ -444,8 +449,9 @@
   }
 
   /** Hopkinson peaks: a maximum of chi just below a Curie point -- above the curve 40-120
-   *  deg C colder by 4 % or more, and followed within 60 deg C by a drop to 60 % or less.
-   *  -> [{ t, chi, branch, i }] (i: index in the run) */
+   *  deg C colder by 4 % or more, and followed within 60 deg C by a drop to 60 % or less --
+   *  near the pyrrhotite or magnetite Curie point only (HOPKINSON_WINDOWS).
+   *  -> [{ t, chi, branch, i, mineral }] (i: index in the run) */
   function hopkinsonPeaks(temps, chis, segment) {
     const out = [];
     for (const { branch, idx, T, Y, sigma } of branchesByT(temps, chis, segment)) {
@@ -464,7 +470,9 @@
         const base = sum / cnt;
         if (!(y >= 1.04 * base && y - base >= 4 * sigma)) continue;
         if (last && t - last.t < 15) continue;
-        last = { t, chi: chis[idx[k]], branch, i: idx[k] };
+        const win = HOPKINSON_WINDOWS.find(([a, b]) => t >= a && t <= b);
+        if (!win) continue;
+        last = { t, chi: chis[idx[k]], branch, i: idx[k], mineral: win[2] };
         out.push(last);
       }
     }
@@ -731,7 +739,7 @@
   }
 
   return {
-    COL, REF_LINES, OFF_SCALE, MINERALS, GRANITE,
+    COL, REF_LINES, OFF_SCALE, MINERALS, MONZOGRANITE, HOPKINSON_WINDOWS,
     basename, dirname, joinPath, extOf, stemOf, loose, isCurveFile, isRecordFile, kindOf, isIm, mainStem,
     parseCurve, parseRecord, findRecordPath, runId, groupRuns, looksLikeDryRun, runLabel, overlayTags,
     runningMean, holderValues, hasStoredSmoothing, storedSmoothingN, nearestIndex,

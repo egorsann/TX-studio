@@ -96,8 +96,8 @@ where its line is; clicking zooms onto the data there — the line flashes yello
 temperature stays in yellow on the axis until you move the plot. Double-click or Esc returns
 to the full curve.
 
-* **Hopkinson peaks** (χ peaking just below a Curie point — clearest in the out-of-phase
-  curve) get a small label at the tip; in the in-phase view, a peak only χ″ shows is marked
+* **Hopkinson peaks** (χ peaking just below the pyrrhotite or magnetite Curie point —
+  clearest in the out-of-phase curve) get a small label at the tip, naming the mineral; in the in-phase view, a peak only χ″ shows is marked
   *χ″ Hopkinson* (E switches to it).
 * Zoomed in, arrows at the plot edges name the next transition or curve feature beyond the
   view (Hopkinson peak, steepest χ drop / rise, where the curve leaves the paramagnetic
@@ -140,12 +140,14 @@ uncertainty). Only for **L1** and the **heating of H1**: after heating, magnetit
   warming branch). **Hover** one to shade it on the plot, **click** it to use it and zoom there.
 * The fit is drawn solid over the fitted stretch and dashed where extrapolated, labelled
   "para 61 %"; θ is adjustable (default 0 K = Curie law). In overlays each run has its own fit.
-* **Mineral model:** the susceptibility a mineral mode would have — a granite by default
-  (quartz, feldspars, biotite, muscovite, amphibole, chlorite), each mineral with a typical
-  mean χ and a Weiss temperature, all editable — drawn as a dotted curve. Its absolute level
-  is unknown for a furnace or cryostat sample, so a slider moves it up and down and
-  **Auto-fit** matches it to the measured χ over the active stretch; the card shows how much
-  of the measured χ its paramagnetic minerals would explain.
+* **Mineral model:** the paramagnetic minerals of a reference rock — a porphyry
+  monzogranite by default (7 % biotite, 3 % hornblende in quartz + feldspars) — as a fixed
+  dotted curve in absolute units (×10⁻⁶ SI, Curie law). It is never fitted to the run: a
+  sample with lots of fresh hornblende and biotite reaches its level *and* its steep rise to
+  low temperature, a flat curve does not. The slider (or *Lay onto curve*) only shifts it up
+  or down, to compare slopes; with a hyperbola fit the card also gives the fitted C as a
+  percentage of the model's. Mode, mean χ (from typical FeO contents) and θ are editable.
+  Absolute values compare only when the run's χ is normalised to the specimen's real volume.
 
 ### Export
 

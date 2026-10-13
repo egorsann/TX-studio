@@ -45,7 +45,7 @@ const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = se
 const DEFAULTS = {
   smoothN: 5, rule: "nearest", view: "corrected", comp: "in",
   heating: true, cooling: true, markers: false, refs: true, stored: false, para: false, paraTheta: 0,
-  model: false, modelMix: null, modelProps: {}, modelY: {},
+  model: false, modelMix: null, modelProps: {}, modelShift: {},
   onlyCurves: true, showCorr: false, showIm: false, theme: "system", sideW: 300, dryOpen: true,
   overrides: {}, dryOverrides: {}, holderSmooth: {}, paraPick: {}, expanded: {}, lastSel: {}, lastRoot: null,
 };
@@ -371,38 +371,39 @@ function paraInfo(r, res = correctionFor(r)) {
 }
 
 // ---------------------------------------------------------------------- mineral model
-// The susceptibility a mineral mode (granite by default) would have, as a curve over
-// temperature (CurLib.mixChi); its absolute level is unknown for a furnace / cryostat sample,
-// so the curve's Y position is set by a slider or fitted to the measured χ.
+// The paramagnetic minerals of a reference rock (a porphyry monzogranite by default) as a
+// fixed curve in absolute units: chi(T) = sum of vol-fraction x chi of each paramagnetic
+// mineral (Curie-Weiss, CurLib.mixChi). It is never fitted to the run -- a slider only
+// moves it up or down -- so its level says what this much hornblende and biotite gives,
+// and its slope can be laid next to the measured curve's.
 function mineralMix() {
-  const pct = state.s.modelMix || L.GRANITE, props = state.s.modelProps || {};
+  const pct = state.s.modelMix || L.MONZOGRANITE, props = state.s.modelProps || {};
   return L.MINERALS.map((m) => ({ ...m, ...(props[m.id] || {}), pct: pct[m.id] || 0 }));
 }
-const mixIsGranite = () => !state.s.modelMix && !Object.keys(state.s.modelProps || {}).length;
+const mixIsDefault = () => !state.s.modelMix && !Object.keys(state.s.modelProps || {}).length;
+const paraMinerals = (mix) => mix.filter((m) => m.theta != null && m.k > 0 && m.pct > 0);
 
-/** χ at 25 °C of the model fitted (one scale factor, least squares) to the measured
- *  heating curve over the stretch c. */
-function modelFitY25(corr, c) {
-  const mix = mineralMix(), m25 = L.mixChi(mix, 25);
-  let num = 0, den = 0;
-  for (let i = 0; i < corr.temp.length; i++) {
-    if (corr.segment[i] !== "heating" || corr.temp[i] < c.lo || corr.temp[i] > c.hi) continue;
-    const m = L.mixChi(mix, corr.temp[i]);
-    num += m * corr.csusc[i]; den += m * m;
-  }
-  return den > 0 && m25 ? (num / den) * m25 : null;
+/** -> { at(t), para25, C, shift, name }, or null when the mode has no paramagnetic minerals.
+ *  C: the mix's Curie constant, comparable with a fitted hyperbola's C. */
+function modelInfo(run) {
+  const para = paraMinerals(mineralMix()), para25 = L.mixChi(para, 25);
+  if (!(para25 > 0)) return null;
+  const shift = state.s.modelShift[run.main] || 0;
+  const C = para.reduce((a, m) => a + (m.pct / 100) * m.k * (298.15 - m.theta), 0);
+  return { at: (t) => L.mixChi(para, t) + shift, para25, C, shift, name: mixIsDefault() ? "monzogranite" : "your mode" };
 }
 
-/** -> { y25, at(t), m25, para25, scale, fitted } for a run with paramagnetic stretch c. */
-function modelInfo(run, res, c) {
-  const mix = mineralMix(), m25 = L.mixChi(mix, 25);
-  if (!m25) return null;
-  const set = state.s.modelY[run.main];
-  const y25 = set != null ? set : modelFitY25(res.cin, c);
-  if (y25 == null) return null;
-  const scale = y25 / m25;
-  const para25 = L.mixChi(mix.filter((m) => m.theta != null && m.k > 0), 25);
-  return { y25, at: (t) => scale * L.mixChi(mix, t), m25, para25, scale, fitted: set == null, name: mixIsGranite() ? "granite" : "your mode" };
+/** Shift that lays the model onto the measured curve without changing its slope: the mean
+ *  difference over the active paramagnetic stretch, else over the heating / warming branch. */
+function alignShift(res, c) {
+  const para = paraMinerals(mineralMix()), corr = res.cin, t0 = corr.temp[0];
+  let sum = 0, n = 0;
+  for (let i = 0; i < corr.temp.length; i++) {
+    if (corr.segment[i] !== "heating" || Math.abs(corr.temp[i] - t0) < 8) continue;
+    if (c && (corr.temp[i] < c.lo || corr.temp[i] > c.hi)) continue;
+    sum += corr.csusc[i] - L.mixChi(para, corr.temp[i]); n++;
+  }
+  return n ? sum / n : 0;
 }
 
 const fmtT = (t) => `${Math.round(t)}`.replace("-", "−");
@@ -448,10 +449,10 @@ function paraCard(r) {
   const res = correctionFor(r);
   const pi = res && paraInfo(r, res);
   if (!res) { card.append(note("info", "Needs an empty-holder correction first.")); return card; }
-  if (pi.blocked) { card.append(note("info", pi.blocked)); return card; }
+  if (pi.blocked) { card.append(note("info", pi.blocked), modelSection(r, res, null)); return card; }
   if (!pi.cands.length) {
     card.append(note("info", `No stretch of the ${r.kind === "LT" ? "warming" : "heating"} curve of 60 °C or more follows a hyperbola – ferromagnetic behaviour dominates.`));
-    card.append(thetaField());
+    card.append(modelSection(r, res, null), thetaField());
     return card;
   }
   const c = pi.active, sh = c.share, f = c.fit;
@@ -492,42 +493,52 @@ function paraCard(r) {
 
 let modelOpen = false;           // the mode table starts folded; stays as set while the app runs
 
-/** Mineral model block of the paramagnetic card: on / off, the Y slider (the model's χ at
- *  25 °C), auto-fit over the active stretch, and the mode with each mineral's χ and θ. */
+/** Mineral model block of the paramagnetic card: on / off, the fixed curve's level, a slider
+ *  that only moves it up or down, and the mode with each mineral's χ and θ.
+ *  c: the run's active paramagnetic stretch (null without a fit). */
 function modelSection(r, res, c) {
   const box = h("div", { class: "model-box" });
   const on = h("input", { type: "checkbox", checked: !!state.s.model });
   on.addEventListener("change", () => { saveSettings({ model: on.checked }); renderViewer(); });
   box.append(h("label", { class: "model-head" }, on, h("span", {}, "Mineral model"),
-    h("span", { class: "delta" }, mixIsGranite() ? "· granite mode" : "· your mode")));
+    h("span", { class: "delta" }, mixIsDefault() ? "· monzogranite" : "· your mode")));
   if (!state.s.model) return box;
-  const mi = modelInfo(r, res, c);
+  const mi = modelInfo(r);
   if (!mi) box.append(note("info", "This mode has no paramagnetic minerals – set some in the table below."));
   else {
-    const top = Math.max(1, ...res.cin.csusc.filter(Number.isFinite).map(Math.abs)) * 2;
-    const sl = h("input", { type: "range", class: "model-slider", min: 0, max: top, step: top / 1000, value: mi.y25,
-      title: "Moves the model curve up or down: its χ at 25 °C" });
-    const val = h("span", { class: "model-val" }), info = h("div", { class: "delta", style: "margin-top:4px" });
-    const show = (y25, fitted) => {
-      const scale = y25 / mi.m25, para = scale * mi.para25, m = c.share.measured;
-      val.textContent = `${y25.toFixed(2)}${fitted ? " · fitted" : ""}`;
-      info.textContent = `Its paramagnetic minerals give χ ${para.toFixed(2)} at 25 °C` +
-        (m > 0 ? ` = ${Math.round((100 * para) / m)} % of the measured ${m.toFixed(2)} (${fmtT(c.share.t)} °C)` : "") +
-        ` · rock of this mode ${mi.m25.toFixed(0)} ×10⁻⁶ SI, scaled ×${scale.toPrecision(2)}`;
+    box.append(h("div", { class: "delta", style: "margin-top:6px" },
+      `Its paramagnetic minerals alone, in absolute units: χ ${mi.para25.toFixed(0)} ×10⁻⁶ SI at 25 °C. ` +
+      "Fixed – the slider only moves the line up or down; its slope is what this much hornblende and biotite gives."));
+    const meas = res.cin.csusc.filter(Number.isFinite).map(Math.abs);
+    const top = Math.max(1, mi.para25, ...meas) * 1.5;
+    const sl = h("input", { type: "range", class: "model-slider", min: -top, max: top, step: top / 1000, value: mi.shift,
+      title: "Moves the model line up or down without changing its slope" });
+    const val = h("span", { class: "model-val" });
+    const showVal = (v) => { val.textContent = v ? `${v > 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}` : "0 · absolute"; };
+    const setShift = (v, redraw) => {
+      if (Math.abs(v) < top / 2000) v = 0;
+      if (v) state.s.modelShift[r.main] = v; else delete state.s.modelShift[r.main];
+      persist();
+      if (redraw) renderViewer();
     };
     let raf = 0;
     sl.addEventListener("input", () => {
-      state.s.modelY[r.main] = +sl.value;
-      show(+sl.value, false);
+      setShift(+sl.value, false);
+      showVal(state.s.modelShift[r.main] || 0);
       cancelAnimationFrame(raf);
       raf = requestAnimationFrame(() => drawPlot(state.selected.map((id) => state.runs.get(id)).filter(Boolean)));
-      persist();
     });
-    const fit = h("button", { class: "btn", title: "Fit the model's Y position to the measured χ over the active stretch (least squares)",
-      onclick: () => { delete state.s.modelY[r.main]; persist(); renderViewer(); } }, "Auto-fit");
-    show(mi.y25, mi.fitted);
-    box.append(h("div", { class: "field", style: "margin:8px 0 0" }, h("label", {}, "Y position – χ at 25 °C ", val),
-      h("div", { class: "model-row" }, sl, fit)), info);
+    showVal(mi.shift);
+    const lay = h("button", { class: "btn", title: c ? "Shift the line onto the measured curve over the active stretch – its slope stays" : "Shift the line onto the measured curve – its slope stays",
+      onclick: () => setShift(alignShift(res, c), true) }, "Lay onto curve");
+    const zero = h("button", { class: "btn", title: "Back to the absolute level", onclick: () => setShift(0, true) }, "0");
+    box.append(h("div", { class: "field", style: "margin:8px 0 0" }, h("label", {}, "Shift ", val), h("div", { class: "model-row" }, sl, lay, zero)));
+    if (c && c.fit.C > 0) {
+      const pct = (100 * c.fit.C) / mi.C;
+      box.append(note("info", `The fitted paramagnetic part (C = ${c.fit.C.toFixed(0)} K) is <b>${pct < 10 ? pct.toFixed(1) : Math.round(pct)} %</b> of this mode's ` +
+        `(C = ${Math.round(mi.C)} K) – as if the specimen held ${pct < 10 ? pct.toFixed(1) : Math.round(pct)} % of its paramagnetic minerals.`));
+    }
+    box.append(h("div", { class: "delta", style: "margin-top:6px" }, "Absolute values compare only if the run's χ is normalised to the specimen's real volume."));
   }
   // the mode: vol % per mineral, its room-temperature χ and Weiss temperature
   const det = h("details", { class: "model-mode" });
@@ -538,7 +549,7 @@ function modelSection(r, res, c) {
   const tbl = h("div", { class: "model-table" }, h("span", { class: "delta" }, "Mineral"), h("span", { class: "delta" }, "vol %"),
     h("span", { class: "delta" }, "χ ×10⁻⁶ SI"), h("span", { class: "delta" }, "θ (K)"));
   const setMix = (id, key, v) => {
-    if (key === "pct") state.s.modelMix = { ...(state.s.modelMix || L.GRANITE), [id]: v };
+    if (key === "pct") state.s.modelMix = { ...(state.s.modelMix || L.MONZOGRANITE), [id]: v };
     else state.s.modelProps = { ...(state.s.modelProps || {}), [id]: { ...((state.s.modelProps || {})[id] || {}), [key]: v } };
     persist(); renderViewer();
   };
@@ -548,12 +559,13 @@ function modelSection(r, res, c) {
     return inp;
   };
   for (const m of mix) {
-    tbl.append(h("span", {}, m.name), num(m.pct, m.id, "pct", 0.5), num(m.k, m.id, "k", 1),
+    tbl.append(h("span", { title: m.note || "" }, m.name), num(m.pct, m.id, "pct", 0.5), num(m.k, m.id, "k", 1),
       m.theta == null ? h("span", { class: "delta" }, "–") : num(m.theta, m.id, "theta", 1));
   }
   det.append(tbl, h("div", { class: "delta", style: "margin-top:6px" },
-    "Typical mean χ of each mineral (not the deviatoric K′ of AMS); θ = 0 K follows the Curie law. ",
-    h("a", { class: "link", onclick: () => { state.s.modelMix = null; state.s.modelProps = {}; persist(); renderViewer(); } }, "Reset to granite")));
+    "Mean χ of each mineral from a typical FeO content (≈ density × 25 × wt% Fe²⁺, Rochette 1987; hover a name) – " +
+    "not the deviatoric K′ of AMS. Enter your own (e.g. from microprobe FeO). θ = 0 K follows the Curie law. ",
+    h("a", { class: "link", onclick: () => { state.s.modelMix = null; state.s.modelProps = {}; persist(); renderViewer(); } }, "Reset to monzogranite")));
   box.append(det);
   return box;
 }
@@ -1109,17 +1121,26 @@ function drawPlot(runs, exportTheme) {
           }
           paraTargets.push({ run, color: theme.para, xs: xa, ys: ya, yaxis, text: `para ${pctText(c)}`, hover: fullName });
           if (c.departure) targets.push({ t: c.departure.t, label: "leaves hyperbola" });
-          // the mineral model: its paramagnetic curve, moved up / down with the Y slider
-          const mi = !multi && s.model ? modelInfo(run, res, c) : null;
-          if (mi) {
-            addTrace({ x: xa, y: xa.map((t) => tf(mi.at(t))), type: "scatter", mode: "lines", line: { color: theme.model, width: 2, dash: "dot" }, yaxis, isPara: true,
-              hovertemplate: hov, legendgroup: run.id + "model" }, "mineral model", `mineral model (${mi.name}), Y at 25 °C = ${mi.y25.toFixed(2)}`);
-            paraTargets.push({ run, color: theme.model, xs: xa, ys: xa.map((t) => tf(mi.at(t))), yaxis, text: `${mi.name} model`, hover: `mineral model (${mi.name})`, model: true });
-          }
         }
       }
       // features found in the curve: Hopkinson peaks (labelled) and steep changes, both
       // also targets for the jump arrows at the plot edges
+      // the mineral model: the reference rock's paramagnetic minerals, fixed (any run,
+      // with or without a hyperbola fit), moved only by the shift slider
+      if (s.para && s.model && !multi && comp === "in" && sr.corr && view !== "raw") {
+        const mi = modelInfo(run);
+        if (mi) {
+          const smax = Math.max(...sr.corr.csusc);
+          const tf = (v) => (view === "norm" ? v / smax : view === "inverse" ? (Math.abs(v) < 1e-3 ? null : 1 / v) : v);
+          const t0 = Math.min(...sr.temp), t1 = Math.max(...sr.temp);
+          const xm = Array.from({ length: 161 }, (_, i) => t0 + ((t1 - t0) * i) / 160), ym = xm.map((t) => tf(mi.at(t)));
+          const name = `${mi.name} paramagnetic minerals${mi.shift ? ` (shifted ${mi.shift > 0 ? "+" : "−"}${Math.abs(mi.shift).toFixed(2)})` : ""}`;
+          addTrace({ x: xm, y: ym, type: "scatter", mode: "lines", line: { color: theme.model, width: 2, dash: "dot" }, yaxis, isPara: true,
+            hovertemplate: `<b>%{fullData.name}</b><br>T = %{x:.1f} °C<br>${view === "inverse" ? "1/χ" : view === "norm" ? "χ/χmax" : "χ"} = %{y:.2f}<extra></extra>`,
+            legendgroup: run.id + "model" }, "mineral model", name);
+          paraTargets.push({ run, color: theme.model, xs: xm, ys: ym, yaxis, text: mi.name, hover: name, model: true });
+        }
+      }
       // Hopkinson peaks show most clearly in the out-of-phase curve, so both components
       // are searched; each is labelled on the curve that shows it
       if (!sr.dry) {
@@ -1145,15 +1166,15 @@ function drawPlot(runs, exportTheme) {
         if (run.kind === "HT") {
           const own = once(L.hopkinsonPeaks(sr.temp, base, sr.segment));
           for (const pk of own) {
-            targets.push({ t: pk.t, label: "Hopkinson" });
-            label(pk, "Hopkinson", `Hopkinson peak at ${fmtT(pk.t)} °C (${comp === "out" ? "out-of-phase" : "in-phase"}, ${pk.branch}): χ peaks just below a Curie point`);
+            targets.push({ t: pk.t, label: `Hopkinson ${pk.mineral}` });
+            label(pk, `Hopkinson · ${pk.mineral}`, `Hopkinson peak at ${fmtT(pk.t)} °C (${comp === "out" ? "out-of-phase" : "in-phase"}, ${pk.branch}): χ peaks just below the ${pk.mineral === "Mag" ? "magnetite" : "pyrrhotite"} Curie point`);
           }
           // in-phase alone: the peaks only the out-of-phase curve shows
           if (comp === "in" && comps.length === 1 && res && res.cout) {
             for (const pk of once(L.hopkinsonPeaks(res.cout.temp, res.cout.csusc, res.cout.segment))) {
               if (own.some((o) => Math.abs(o.t - pk.t) < 25)) continue;
-              targets.push({ t: pk.t, label: "χ″ Hopkinson" });
-              label(pk, "χ″ Hopkinson", `The out-of-phase curve peaks at ${fmtT(pk.t)} °C (${pk.branch}) – a Hopkinson peak; E shows it`);
+              targets.push({ t: pk.t, label: `χ″ Hopkinson ${pk.mineral}` });
+              label(pk, `χ″ Hopkinson · ${pk.mineral}`, `The out-of-phase curve peaks at ${fmtT(pk.t)} °C (${pk.branch}) – a Hopkinson peak of ${pk.mineral === "Mag" ? "magnetite" : "pyrrhotite"}; E shows it`);
             }
           }
         }
@@ -1251,10 +1272,12 @@ function drawPlot(runs, exportTheme) {
     gd._refClicks = true;
     gd.on("plotly_clickannotation", (ev) => {
       const name = ev.annotation && ev.annotation.name;
-      if (name && name.startsWith("ref:")) zoomToTemp(+name.slice(4));
+      if (name && name.startsWith("ref:")) { $$(".plot-wrap .ref-preview").forEach((e) => e.remove()); zoomToTemp(+name.slice(4)); }
     });
     // moving the plot clears the temperature label of the last jump
-    gd.on("plotly_relayout", () => { $$(".plot-wrap .ref-temp").forEach((e) => e.remove()); updateJumpers(); });
+    gd.on("plotly_relayout", () => { $$(".plot-wrap .ref-temp, .plot-wrap .ref-preview").forEach((e) => e.remove()); updateJumpers(); });
+    gd.on("plotly_relayouting", () => $$(".plot-wrap .ref-preview").forEach((e) => e.remove()));
+    gd.addEventListener("mouseleave", () => $$(".plot-wrap .ref-preview").forEach((e) => e.remove()));
     // hovering a transition label previews its line
     gd.addEventListener("mouseover", (e) => {
       const g = e.target.closest && e.target.closest(".annotation");
@@ -2078,7 +2101,7 @@ function wire() {
 (async function init() {
   const saved = await api.getSettings();
   state.s = { ...DEFAULTS, ...saved };
-  for (const k of ["overrides", "dryOverrides", "holderSmooth", "paraPick", "modelProps", "modelY", "expanded", "lastSel"]) state.s[k] = { ...(saved[k] || {}) };
+  for (const k of ["overrides", "dryOverrides", "holderSmooth", "paraPick", "modelProps", "modelShift", "expanded", "lastSel"]) state.s[k] = { ...(saved[k] || {}) };
   document.documentElement.style.setProperty("--side-w", (state.s.sideW || 300) + "px");
   if (api.nativeFrame) document.documentElement.classList.add("native-frame");
   wire();

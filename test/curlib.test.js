@@ -84,7 +84,7 @@ test("Hopkinson peak and Curie drop found on a synthetic magnetite heating", () 
   const corr = synthRun(temps, chi, 0.05);
   const hp = L.hopkinsonPeaks(corr.temp, corr.csusc, corr.segment);
   assert.equal(hp.length, 1);
-  assert.ok(hp[0].branch === "heating" && Math.abs(hp[0].t - 570) <= 6, `peak at ${hp[0].t}`);
+  assert.ok(hp[0].branch === "heating" && hp[0].mineral === "Mag" && Math.abs(hp[0].t - 570) <= 6, `peak at ${hp[0].t}`);
   const st = L.steepChanges(corr.temp, corr.csusc, corr.segment).filter((x) => x.branch === "heating");
   assert.equal(st.length, 1);
   assert.ok(st[0].dir === -1 && st[0].t > 570 && st[0].t < 600, `drop at ${st[0].t}`);
@@ -99,7 +99,7 @@ test("run order L1 H1 L2 H2; mineral mix follows Curie law, diamagnets stay cons
   const mix = [{ pct: 10, k: 1000, theta: 0 }, { pct: 90, k: -14, theta: null }];
   assert.ok(Math.abs(L.mixChi(mix, 25) - (100 - 12.6)) < 1e-9);
   assert.ok(Math.abs(L.mixChi(mix, -196.15) - (100 * 298.15 / 77 - 12.6)) < 1e-6);
-  const granite = L.MINERALS.map((m) => ({ ...m, pct: L.GRANITE[m.id] || 0 }));
+  const granite = L.MINERALS.map((m) => ({ ...m, pct: L.MONZOGRANITE[m.id] || 0 }));
   assert.equal(granite.reduce((a, m) => a + m.pct, 0), 100);
   assert.ok(L.mixChi(granite, 25) > 50 && L.mixChi(granite, 25) < 200);
 });
