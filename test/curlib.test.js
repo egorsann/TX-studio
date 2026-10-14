@@ -120,6 +120,7 @@ test("notes file keeps notes, plot annotations and links; ASCII only; older file
     notes: { "AB24CD101-27H1": "paramagnetic; pyrite → magnetite", "AB24CD101-27L1": "" },
     marks: { "AB24CD101-27H1": [{ id: "a1", i: 66, comp: "in", t: 365, text: "magnetite ≈ 365 °C", ax: -40, ay: -60 }], "X": [] },
     links: { "AB24CD101-27H1": { "pyrite → magnetite": { stem: "AB24CD101-27H1", i: 107, comp: "in", t: 564.4 } } },
+    acks: { "AB24CD101-27L1": { range: "MRFREEZE20260901" }, "X": {} },
   };
   const text = L.notesText(file);
   assert.ok([...text].every((c) => c.charCodeAt(0) < 128));
@@ -127,7 +128,8 @@ test("notes file keeps notes, plot annotations and links; ASCII only; older file
   assert.deepEqual(back.notes, { "AB24CD101-27H1": "paramagnetic; pyrite → magnetite" });
   assert.deepEqual(back.marks, { "AB24CD101-27H1": file.marks["AB24CD101-27H1"] });
   assert.deepEqual(back.links, file.links);
-  assert.deepEqual(L.parseNotes(JSON.stringify({ app: "TX Studio", notes: { "AB24CD101-27": "old" } })), { notes: { "AB24CD101-27": "old" }, marks: {}, links: {} });
+  assert.deepEqual(back.acks, { "AB24CD101-27L1": { range: "MRFREEZE20260901" } });
+  assert.deepEqual(L.parseNotes(JSON.stringify({ app: "TX Studio", notes: { "AB24CD101-27": "old" } })), { notes: { "AB24CD101-27": "old" }, marks: {}, links: {}, acks: {} });
   assert.equal(L.parseNotes('{"something": "else"}'), null);
 });
 

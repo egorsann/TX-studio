@@ -19,6 +19,7 @@
   --para: #7c3aed;
   --model: #0f766e;
   --mark: #b45309;
+  --soft: #a18157;
   --zero: #1c2027;
   --ht: #c2410c;
   --ht-soft: #fdebe1;
@@ -57,6 +58,7 @@
   --para: #b197fc;
   --model: #2dd4bf;
   --mark: #fbbf24;
+  --soft: #b49a74;
   --zero: #f1f3f5;
   --ht: #fb923c;
   --ht-soft: #3a2316;
@@ -293,6 +295,7 @@ button:disabled { opacity: .45; cursor: default; }
 .card-status svg { width: 15px; height: 15px; stroke-width: 2.4; }
 .card-status.ok svg { color: var(--ok); }
 .card-status.warn svg { color: var(--warn); stroke-width: 2; }
+.card-status.soft svg { color: var(--soft); stroke-width: 2; }
 .card-summary { padding: 0 12px 11px 32px; margin-top: -4px; font-size: 12.5px; color: var(--text-2); overflow-wrap: anywhere; }
 .card-body { display: none; padding: 0 12px 12px; }
 .card.collapsible.open .card-summary { display: none; }
@@ -321,6 +324,17 @@ select:focus, .num input:focus { outline: 0; border-color: var(--accent); box-sh
 .note.warn { background: var(--warn-soft); }
 .note.warn svg { color: var(--warn); }
 .note.info { background: var(--bg-3); color: var(--text-2); }
+/* a notice that needs no correction: gray, triangle, OK switch */
+.note.soft { background: var(--bg-3); color: var(--text-2); }
+.note.soft svg { color: var(--soft); }
+.note.soft.acked { opacity: .72; }
+.ack { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 650; color: var(--text-2); cursor: pointer; position: relative; }
+.ack input { position: absolute; opacity: 0; width: 0; height: 0; }
+.ack-slider { width: 26px; height: 14px; border-radius: 7px; background: var(--line-2); position: relative; transition: background .15s; }
+.ack-slider::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--bg); box-shadow: 0 1px 2px rgba(0, 0, 0, .25); transition: transform .15s; }
+.ack input:checked + .ack-slider { background: var(--ok); }
+.ack input:checked + .ack-slider::after { transform: translateX(12px); }
+.ack input:focus-visible + .ack-slider { outline: 2px solid var(--accent); outline-offset: 1px; }
 .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .btn {
   flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px;

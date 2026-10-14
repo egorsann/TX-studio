@@ -251,7 +251,7 @@ async function loadNotes() {
   files.forEach(({ path: p, runs }, i) => {
     const old = state.notes.get(p.toLowerCase());
     if (old && old.dirty) { m.set(p.toLowerCase(), old); return; }       // edit not written yet
-    const parsed = texts[i] == null ? { notes: {}, marks: {}, links: {} } : L.parseNotes(texts[i]);
+    const parsed = texts[i] == null ? { notes: {}, marks: {}, links: {}, acks: {} } : L.parseNotes(texts[i]);
     const notes = parsed && parsed.notes;
     // notes of v0.6 were per piece ("AB24CD101-27"): each run of that piece starts with a copy
     if (notes) for (const k of Object.keys(notes)) {
@@ -261,7 +261,8 @@ async function loadNotes() {
       for (const r of piece) if (!notes[r.stem]) notes[r.stem] = notes[k];
       delete notes[k];
     }
-    m.set(p.toLowerCase(), { path: p, notes: notes || {}, marks: (parsed && parsed.marks) || {}, links: (parsed && parsed.links) || {}, foreign: texts[i] != null && !parsed });
+    m.set(p.toLowerCase(), { path: p, notes: notes || {}, marks: (parsed && parsed.marks) || {}, links: (parsed && parsed.links) || {},
+      acks: (parsed && parsed.acks) || {}, foreign: texts[i] != null && !parsed });
   });
   return m;
 }
@@ -745,7 +746,7 @@ function showPeek() {
     if (ln) row.append(h("button", { class: "note-peek-x", title: "Remove the link",
       onmousedown: (e) => { e.preventDefault(); e.stopPropagation(); setLink(r, it, null); showPeek(); } }, "×"));
     row.addEventListener("mousedown", (e) => {
-      if (!e.altKey) return;
+      if (e.button !== 0) return;
       e.preventDefault();
       if (ln && !e.shiftKey) jumpToLink(ln); else startLink(r, it);
     });
@@ -1785,7 +1786,14 @@ function wireCrosshair() {
     hide(); hidePeek(); setPointsShown(false);
     if (editor && !editor.locked) closeEditor();
   });
-  addEventListener("blur", () => { hide(); hidePeek(); });
+  addEventListener("blur", () => hide());
+  // Alt is held exactly while mouse events say so -- also when the key events go elsewhere
+  document.addEventListener("mousemove", (e) => {
+    if (e.altKey) return;
+    if ($(".note-peek")) hidePeek();
+    if (editor && !editor.locked) closeEditor();
+    if (pointsShown && !linking) setPointsShown(false);
+  }, true);
 }
 
 function wirePlotMouse() {
@@ -1917,6 +1925,34 @@ function note(kind, html) {
   return n;
 }
 
+/** A notice that needs no correction: gray, with an OK switch that stops it flagging the
+ *  collapsed card. */
+function softNote(html, acked, onToggle) {
+  const n = h("div", { class: `note soft${acked ? " acked" : ""}` });
+  n.innerHTML = ICON.warn + `<div>${html}</div>`;
+  const sw = h("input", { type: "checkbox", role: "switch" });
+  sw.checked = acked;
+  sw.addEventListener("change", () => onToggle(sw.checked));
+  n.append(h("label", { class: "ack", title: acked ? "Marked OK – the collapsed card no longer flags it" : "Mark OK: the collapsed card stops flagging it" },
+    sw, h("span", { class: "ack-slider" }), "OK"));
+  return n;
+}
+
+/** Notices of a run marked OK, kept in its notes file: ackOf(r, "range") -> value or null */
+function ackOf(r, key) {
+  const f = notesFileFor(r);
+  return (f && f.acks && f.acks[r.stem] && f.acks[r.stem][key]) || null;
+}
+function setAck(r, key, val) {
+  const f = writableNotes(r);
+  if (!f) return;
+  const a = { ...((f.acks || {})[r.stem] || {}) };
+  if (val) a[key] = val; else delete a[key];
+  f.acks = { ...(f.acks || {}), [r.stem]: a };
+  touchNotes(f);
+  renderViewer();
+}
+
 /** Card that collapses to its heading, a status mark (green check / amber warning) and a
  *  one-line summary; the body opens on click. */
 function collapsibleCard(title, status, summary, body, isOpen, setOpen) {
@@ -1924,7 +1960,8 @@ function collapsibleCard(title, status, summary, body, isOpen, setOpen) {
   const head = h("button", { class: "card-head", "aria-expanded": String(isOpen()) });
   head.innerHTML = ICON.chev;
   head.append(h("span", { class: "card-title" }, title));
-  const mark = h("span", { class: `card-status ${status}`, title: status === "ok" ? "Everything looks right" : "Needs a look – open for details" });
+  const mark = h("span", { class: `card-status ${status}`,
+    title: status === "ok" ? "Everything looks right" : status === "soft" ? "Only a notice – open for details" : "Needs a look – open for details" });
   mark.innerHTML = status === "ok" ? ICON.ok : ICON.warn;
   head.append(mark);
   head.addEventListener("click", () => {
@@ -1943,7 +1980,8 @@ function correctionCard(r) {
   const issues = [];
   const cands = candidatesFor(r);
   const pair = dryFor(r);
-  const card = (summary) => collapsibleCard("Empty-holder correction", issues.length ? "warn" : "ok", summary, body,
+  const soft = [];            // notices that need no correction, until marked OK
+  const card = (summary) => collapsibleCard("Empty-holder correction", issues.length ? "warn" : soft.length ? "soft" : "ok", summary, body,
     () => corrOpen, (v) => { corrOpen = v; });
   if (!cands.length) {
     issues.push("none");
@@ -2007,8 +2045,14 @@ function correctionCard(r) {
       if (st.cold) parts.push(`${pts(st.cold)} colder than ${st.holderTmin.toFixed(1)} °C`);
       // a stray start/end point is normal; a stretch of the curve beyond the holder is not
       const many = st.cold + st.warm > Math.max(3, st.n * 0.02);
-      if (many) issues.push("range");
-      body.append(note(many ? "warn" : "info", `${parts.join(" and ")} — outside the empty holder's range. Its end value is used there (shaded in the plot).`));
+      const text = `${parts.join(" and ")} — outside the empty holder's range. Its end value is used there (shaded in the plot).`;
+      if (!many) body.append(note("info", text));
+      else {
+        // nothing to correct, just to know: OK (kept for this empty holder) stops the flag
+        const acked = ackOf(r, "range") === pair.dry.stem;
+        if (!acked) soft.push("range");
+        body.append(softNote(text, acked, (on) => setAck(r, "range", on ? pair.dry.stem : null)));
+      }
     }
     const cmp = st.compare;
     if (cmp) {

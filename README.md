@@ -83,7 +83,9 @@ No manual "smooth the empty curve, open it, subtract":
 
 The correction card stays collapsed to one line — holder · time gap · smoothing — with a
 green check, or an amber mark when something needs a look (no holder, holder more than
-30 days away, many points outside its temperature range, no smoothing).
+30 days away, no smoothing). A stretch of the run beyond the empty holder's temperature range
+is only a notice (gray, muted triangle): its **OK** switch stops it flagging the card, kept in
+the run's `_notes.json` for that empty holder.
 
 ![Empty-holder run with the smoothing choice: running mean, from file, or none](docs/screenshots/empty-holder-smoothing.png)
 
