@@ -115,6 +115,22 @@ test("out-of-phase is corrected with the empty holder's own _Im file", () => {
   assert.equal(L.correctRun(sample, sampleIm, holder, null, { mode: "none" }).cout, null, "no _Im holder: no out-of-phase correction");
 });
 
+test("notes file keeps notes, plot annotations and links; ASCII only; older files still load", () => {
+  const file = {
+    notes: { "AB24CD101-27H1": "paramagnetic; pyrite → magnetite", "AB24CD101-27L1": "" },
+    marks: { "AB24CD101-27H1": [{ id: "a1", i: 66, comp: "in", t: 365, text: "magnetite ≈ 365 °C", ax: -40, ay: -60 }], "X": [] },
+    links: { "AB24CD101-27H1": { "pyrite → magnetite": { stem: "AB24CD101-27H1", i: 107, comp: "in", t: 564.4 } } },
+  };
+  const text = L.notesText(file);
+  assert.ok([...text].every((c) => c.charCodeAt(0) < 128));
+  const back = L.parseNotes(text);
+  assert.deepEqual(back.notes, { "AB24CD101-27H1": "paramagnetic; pyrite → magnetite" });
+  assert.deepEqual(back.marks, { "AB24CD101-27H1": file.marks["AB24CD101-27H1"] });
+  assert.deepEqual(back.links, file.links);
+  assert.deepEqual(L.parseNotes(JSON.stringify({ app: "TX Studio", notes: { "AB24CD101-27": "old" } })), { notes: { "AB24CD101-27": "old" }, marks: {}, links: {} });
+  assert.equal(L.parseNotes('{"something": "else"}'), null);
+});
+
 test("fixed-width parse copes with touching columns", () => {
   const txt = "  TEMP    TSUSC     CSUSC NSUSC       BULKS    FERRT    FERRB   TIMERHOTSTUFF\n" +
               "  26.6    -43.7     -0.66-0.019         0.0      0.0      0.0      0      0.0\n";

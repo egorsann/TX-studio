@@ -251,7 +251,8 @@ async function loadNotes() {
   files.forEach(({ path: p, runs }, i) => {
     const old = state.notes.get(p.toLowerCase());
     if (old && old.dirty) { m.set(p.toLowerCase(), old); return; }       // edit not written yet
-    const notes = texts[i] == null ? {} : L.parseNotes(texts[i]);
+    const parsed = texts[i] == null ? { notes: {}, marks: {}, links: {} } : L.parseNotes(texts[i]);
+    const notes = parsed && parsed.notes;
     // notes of v0.6 were per piece ("AB24CD101-27"): each run of that piece starts with a copy
     if (notes) for (const k of Object.keys(notes)) {
       if (runs.some((r) => r.stem === k)) continue;
@@ -260,7 +261,7 @@ async function loadNotes() {
       for (const r of piece) if (!notes[r.stem]) notes[r.stem] = notes[k];
       delete notes[k];
     }
-    m.set(p.toLowerCase(), { path: p, notes: notes || {}, foreign: texts[i] != null && !notes });
+    m.set(p.toLowerCase(), { path: p, notes: notes || {}, marks: (parsed && parsed.marks) || {}, links: (parsed && parsed.links) || {}, foreign: texts[i] != null && !parsed });
   });
   return m;
 }
@@ -274,10 +275,21 @@ function setNote(r, text) {
   const key = noteKey(r), v = text.trim();
   if ((f.notes[key] || "") === v) return;
   if (v) f.notes[key] = v; else delete f.notes[key];
-  f.dirty = true;
+  touchNotes(f);
   renderTreeSoon();
+}
+/** The notes file changed: write it shortly. */
+function touchNotes(f) {
+  f.dirty = true;
   clearTimeout(noteTimers.get(f.path));
   noteTimers.set(f.path, setTimeout(() => writeNotes(f), 800));
+}
+/** The notes file of a run, if notes may be saved there (else a toast says why). */
+function writableNotes(r) {
+  const f = notesFileFor(r);
+  if (!f) return null;
+  if (f.foreign) { toast(`${L.basename(f.path)} exists but is not a TX Studio notes file – left unchanged`); return null; }
+  return f;
 }
 async function writeNotes(f) {
   clearTimeout(noteTimers.get(f.path));
@@ -285,7 +297,7 @@ async function writeNotes(f) {
   if (!f.dirty) return;
   f.dirty = false;
   try {
-    await api.writeText(f.path, L.notesText(f.notes));
+    await api.writeText(f.path, L.notesText(f));
     setStatus(`Notes saved · ${L.basename(f.path)}`);
   } catch (err) {
     f.dirty = true;
@@ -326,7 +338,7 @@ function notesCard(r) {
   markTags();
   card.append(ta, tags);
   if (f && f.foreign) card.append(note("warn", `<code>${esc(L.basename(f.path))}</code> already exists and is not a TX Studio notes file, so notes are not saved there.`));
-  else if (f) card.append(h("div", { class: "delta", style: "margin-top:6px" }, h("span", {}, "Shown after the name in the sidebar (Alt + hover: one item per line) · saved to "),
+  else if (f) card.append(h("div", { class: "delta", style: "margin-top:6px" }, h("span", {}, "Shown after the name in the sidebar; Alt + hover lists the items – Alt + click one to link it to a point · saved to "),
     h("a", { class: "link", title: f.path, onclick: () => api.reveal(f.path) }, L.basename(f.path))));
   return card;
 }
@@ -693,9 +705,10 @@ function emit(v, depth, out, q) {
     row.append(withMatch(h("span", { class: nt ? "name has-note" : "name" }), L.basename(f.path).replace(/\.(cur|clw)$/i, ""), q));
     // the run's note, faded, right after the name (Alt + hover: one item per line)
     if (nt) row.append(withMatch(h("span", { class: "note-text" }), noteItems(nt).join(" · "), q));
-    row.addEventListener("mouseenter", (e) => { peek = { row, r }; if (e.altKey) showPeek(); });
+    row.addEventListener("mouseenter", (e) => { peek = { row, r }; peekOver = true; if (e.altKey) showPeek(); });
     row.addEventListener("mousemove", (e) => { if (e.altKey) { if (!$(".note-peek")) showPeek(); } else hidePeek(); });
-    row.addEventListener("mouseleave", () => { peek = null; hidePeek(); });
+    // with Alt held the panel stays, so the mouse can move over to it
+    row.addEventListener("mouseleave", (e) => { peekOver = false; if (!e.altKey) { peek = null; hidePeek(); } });
     if (r.dry) row.append(h("span", { class: "pill dry", title: `Empty-holder run – smoothed (${describeSmoothing(r)}) and subtracted from the other runs` }, "EMPTY"));
     if (r.out) row.append(h("span", { class: "pill out", title: "Exported output" }, "OUT"));
     if (r.curveIm && !f.im && !state.s.showIm) row.append(h("span", { class: "pill im", title: "Out-of-phase (imaginary, χ″) data merged in from the _Im file – shown by the Out-of-phase / Both views" }, "Im"));
@@ -715,19 +728,223 @@ function emit(v, depth, out, q) {
 }
 
 // Alt + hover over a run: its notes, one item per line, in a panel right of the sidebar
-let peek = null;              // { row, r } under the mouse
+let peek = null, peekOver = false;     // { row, r } last under the mouse; still over it
+// Alt + click an item: jump to the point it is linked to, or (not linked yet / with Shift)
+// pick that point on the curve
 function showPeek() {
   hidePeek();
   if (!peek || !peek.row.isConnected) return;
-  const items = noteItems(noteOf(peek.r));
-  const el = h("div", { class: "note-peek" }, h("div", { class: "note-peek-head" }, peek.r.stem),
-    ...(items.length ? items.map((t) => h("div", { class: "note-peek-item" }, t)) : [h("div", { class: "delta" }, "No notes – add them in the inspector")]));
+  const r = peek.r, f = notesFileFor(r), items = noteItems(noteOf(r)), links = (f && f.links[r.stem]) || {};
+  const el = h("div", { class: "note-peek" }, h("div", { class: "note-peek-head" }, r.stem));
+  if (!items.length) el.append(h("div", { class: "delta" }, "No notes – add them in the inspector"));
+  for (const it of items) {
+    const ln = links[it];
+    const row = h("div", { class: `note-peek-item${ln ? " linked" : ""}`,
+      title: ln ? "Alt + click: jump to its point · Alt + Shift + click: link it to another point" : "Alt + click: link this item to a point on the curve" },
+      h("span", { class: "note-peek-text" }, it), h("span", { class: "note-peek-link" }, ln ? `↗ ${fmtT(ln.t)} °C` : "link"));
+    if (ln) row.append(h("button", { class: "note-peek-x", title: "Remove the link",
+      onmousedown: (e) => { e.preventDefault(); e.stopPropagation(); setLink(r, it, null); showPeek(); } }, "×"));
+    row.addEventListener("mousedown", (e) => {
+      if (!e.altKey) return;
+      e.preventDefault();
+      if (ln && !e.shiftKey) jumpToLink(ln); else startLink(r, it);
+    });
+    el.append(row);
+  }
+  if (items.length) el.append(h("div", { class: "note-peek-hint" }, "Alt + click an item: link it to a point, or jump to its point"));
   document.body.append(el);
   const rr = peek.row.getBoundingClientRect(), side = $("#sidebar").getBoundingClientRect();
   el.style.left = side.right + 8 + "px";
   el.style.top = Math.max(8, Math.min(rr.top - 4, innerHeight - el.offsetHeight - 8)) + "px";
 }
 function hidePeek() { $$(".note-peek").forEach((e) => e.remove()); }
+
+// ---------------------------------------------------------------------- links and annotations
+// A note item can be tied to a point of a curve (Alt + click it in the notes panel, then
+// click the point); Alt + click on it later zooms there. Alt + click on a point puts a small
+// annotation on the plot. Both live in the run's notes file.
+let linking = null;          // { run, item } while the point for a note item is being picked
+let pointsShown = false;     // measurement points shown for picking (Alt held / linking)
+
+function setLink(r, item, target) {
+  const f = writableNotes(r);
+  if (!f) return;
+  const l = { ...(f.links[r.stem] || {}) };
+  if (target) l[item] = target; else delete l[item];
+  f.links[r.stem] = l;
+  touchNotes(f);
+}
+
+function startLink(r, item) {
+  hidePeek();
+  linking = { run: r, item };
+  if (!state.selected.includes(r.id)) select([r.id], { scroll: true });
+  $$(".plot-wrap .link-banner").forEach((e) => e.remove());
+  $(".plot-wrap").append(h("div", { class: "link-banner" }, `Click the point “${item}” belongs to · Esc cancels`));
+  setPointsShown(true);
+}
+function endLink() {
+  linking = null;
+  $$(".plot-wrap .link-banner").forEach((e) => e.remove());
+  setPointsShown(false);
+}
+
+/** Zoom onto the point a note item is linked to (opening its run first if needed). */
+function jumpToLink(ln) {
+  hidePeek();
+  const run = [...state.runs.values()].find((x) => x.stem === ln.stem && !x.out);
+  if (!run) { toast(`${ln.stem} is not in this folder`); return; }
+  let change = !state.selected.includes(run.id);
+  if (ln.comp === "out" && state.s.comp === "in") { saveSettings({ comp: "out" }); change = true; }
+  if (ln.comp === "in" && state.s.comp === "out") { saveSettings({ comp: "in" }); change = true; }
+  if (change) {
+    select([run.id], { scroll: true });
+    requestAnimationFrame(() => requestAnimationFrame(() => zoomToTemp(ln.t)));
+  } else zoomToTemp(ln.t);
+}
+
+/** Show the measurement points (for clicking one) while Alt is held or a link is made. */
+function setPointsShown(on) {
+  on = !!(on || linking);
+  if (on === pointsShown) return;
+  pointsShown = on;
+  const gd = $("#plot");
+  if (!gd.data) return;
+  const idx = [], modes = [];
+  gd.data.forEach((t, i) => { if (t.isData && t.baseMode !== "markers") { idx.push(i); modes.push(on ? "lines+markers" : t.baseMode); } });
+  if (idx.length) Plotly.restyle(gd, { mode: modes }, idx);
+}
+
+function findMark(name) {
+  const [, stem, id] = name.split(":");
+  const run = [...state.runs.values()].find((x) => x.stem === stem && !x.out);
+  const f = run && notesFileFor(run), mark = f && (f.marks[stem] || []).find((m) => m.id === id);
+  return mark ? { run, f, mark } : null;
+}
+function moveMark(name, key, v) {
+  const found = findMark(name);
+  if (!found || !Number.isFinite(+v)) return;
+  found.mark[key] = Math.round(+v);
+  touchNotes(found.f);
+}
+
+/** Add, change (text) or delete (empty text) an annotation of row i of a run's curve. */
+function saveMark(run, comp, i, text, mark) {
+  const f = writableNotes(run);
+  if (!f) return;
+  const list = (f.marks[run.stem] || []).slice();
+  if (mark) {
+    const k = list.findIndex((m) => m.id === mark.id);
+    if (k >= 0) { if (text) list[k] = { ...list[k], text }; else list.splice(k, 1); }
+  } else if (text) {
+    const [ax, ay] = placeMark(run, comp, i, text);
+    const t = (comp === "out" ? run.curveIm : run.curve).rows[i].temp;
+    list.push({ id: Date.now().toString(36), i, comp, t: Math.round(t * 10) / 10, text, ax, ay });
+  }
+  f.marks[run.stem] = list;
+  touchNotes(f);
+  drawPlot(state.selected.map((id) => state.runs.get(id)).filter(Boolean));
+}
+
+/** Where a new annotation's label goes: the offset from its point (px) that keeps the
+ *  label clearest of every plotted point and of the labels already on the plot. */
+function placeMark(run, comp, i, text) {
+  const gd = $("#plot"), g = plotGeom();
+  const tr = g && (gd.data || []).find((t) => t.runId === run.id && t.comp === comp && t.rows && t.rows.includes(i));
+  if (!tr) return [40, -50];
+  const yr = (ax) => (ax === "y2" && g.ys[1] ? g.ys[1][1] : g.ys[0][1]);
+  const px = (x) => g.left + ((x - g.x[0]) / (g.x[1] - g.x[0])) * g.w;
+  const py = (y, ax) => { const r = yr(ax); return g.top + ((r[1] - y) / (r[1] - r[0])) * g.h; };
+  const k = tr.rows.indexOf(i), x0 = px(tr.x[k]), y0 = py(tr.y[k], tr.yaxis || "y");
+  const pts = [];
+  for (const t of shownTraces()) t.x.forEach((x, j) => { const y = t.y[j]; if (y != null && Number.isFinite(y)) pts.push([px(x), py(y, t.yaxis || "y")]); });
+  const boxes = $$("#plot .annotation").map((a) => a.getBoundingClientRect());
+  const w = Math.min(280, text.length * 6.6 + 18), hh = 22;
+  let best = null;
+  for (const dy of [-50, 50, -80, 80, -115, 115]) for (const dx of [0, 60, -60, 120, -120, 180, -180]) {
+    const l = x0 + dx - w / 2, r = x0 + dx + w / 2, t = y0 + dy - hh / 2, b = y0 + dy + hh / 2;
+    if (l < g.left + 2 || r > g.left + g.w - 2 || t < g.top + 2 || b > g.top + g.h - 2) continue;
+    let clear = 30;                  // clear by 30 px is clear enough: then the nearest spot wins
+    for (const [x, y] of pts) clear = Math.min(clear, Math.max(l - x, x - r, t - y, y - b, 0));
+    const hit = boxes.some((q) => !(q.right < l || q.left > r || q.bottom < t || q.top > b));
+    const score = clear - (hit ? 100 : 0) - Math.hypot(dx, dy) * 0.08;
+    if (!best || score > best.score) best = { score, dx, dy };
+  }
+  return best ? [best.dx, best.dy] : [40, -50];
+}
+
+// the small box for an annotation's text: it stays while Alt is held, and once its text
+// field is clicked until Enter (save) or Esc
+let editor = null;           // { el, locked }
+function closeEditor() { if (editor) { editor.el.remove(); editor = null; } }
+function openMarkEditor(run, comp, i, cx, cy, mark) {
+  closeEditor();
+  const t = (comp === "out" ? run.curveIm : run.curve).rows[i].temp;
+  const wrap = $(".plot-wrap"), wr = wrap.getBoundingClientRect();
+  const input = h("input", { type: "text", class: "mark-input", spellcheck: "false", placeholder: "Annotation…" });
+  input.value = mark ? mark.text : "";
+  const el = h("div", { class: "mark-editor" },
+    h("div", { class: "mark-ed-head" }, `${run.stem} · ${fmtT(t)} °C${comp === "out" ? " · χ″" : ""}`), input,
+    h("div", { class: "delta" }, mark ? "Enter saves · empty + Enter deletes · Esc cancels" : "Click the box, type, Enter · Esc cancels"));
+  if (mark) el.append(h("button", { class: "btn mark-del", onmousedown: (e) => e.preventDefault(),
+    onclick: () => { closeEditor(); saveMark(run, comp, i, "", mark); } }, "Delete"));
+  wrap.append(el);
+  el.style.left = Math.max(4, Math.min(cx - wr.left + 14, wr.width - el.offsetWidth - 4)) + "px";
+  el.style.top = Math.max(4, Math.min(cy - wr.top - el.offsetHeight - 12, wr.height - el.offsetHeight - 4)) + "px";
+  const ed = { el, locked: false };
+  editor = ed;
+  const lock = () => { ed.locked = true; };
+  input.addEventListener("mousedown", lock);
+  input.addEventListener("focus", lock);
+  const done = (save) => {
+    if (editor !== ed) return;
+    const text = input.value.trim();
+    closeEditor();
+    if (save && text !== (mark ? mark.text : "")) saveMark(run, comp, i, text, mark);
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") done(true);
+    if (e.key === "Escape") done(false);
+  });
+  // clicked elsewhere after typing: keep what was typed (but never delete that way)
+  input.addEventListener("blur", () => setTimeout(() => { if (editor === ed && ed.locked && input.value.trim()) done(true); else if (editor === ed && ed.locked) done(false); }, 150));
+}
+
+// ---------------------------------------------------------------------- updates
+// The newest release on GitHub, looked up at most every 6 hours; a small pill in the title
+// bar when it is newer than this copy (× hides that version).
+const RELEASES = "https://github.com/egorsann/TX-studio/releases/latest";
+const newerVersion = (a, b) => {
+  const pa = String(a).split(".").map(Number), pb = String(b).split(".").map(Number);
+  for (let k = 0; k < 3; k++) if ((pa[k] || 0) !== (pb[k] || 0)) return (pa[k] || 0) > (pb[k] || 0);
+  return false;
+};
+async function checkForUpdate() {
+  try {
+    const current = (await (await fetch("../package.json", { cache: "no-store" })).json()).version;
+    let latest = state.s.latestSeen;
+    if (!latest || Date.now() - (state.s.latestChecked || 0) > 6 * 3600e3) {
+      const r = await fetch("https://api.github.com/repos/egorsann/TX-studio/releases/latest", { headers: { Accept: "application/vnd.github+json" } });
+      if (r.ok) {
+        latest = String((await r.json()).tag_name || "").replace(/^v/i, "");
+        saveSettings({ latestSeen: latest, latestChecked: Date.now() });
+      }
+    }
+    showUpdate(latest, current);
+  } catch { /* offline or no package.json (development): nothing to say */ }
+}
+function showUpdate(latest, current) {
+  const pill = $("#updatePill");
+  const on = !!latest && !!current && newerVersion(latest, current) && state.s.skipVersion !== latest;
+  pill.classList.toggle("hidden", !on);
+  if (!on) return;
+  pill.innerHTML = "";
+  const open = h("button", { class: "update-open", title: `TX Studio ${latest} is out (this is ${current}). Opens the download page – unzip and run "Install TX Studio.cmd".`,
+    onclick: () => api.openUrl(RELEASES) }, `Update ${latest}`);
+  const skip = h("button", { class: "update-skip", title: "Hide until the next version", onclick: () => { saveSettings({ skipVersion: latest }); pill.classList.add("hidden"); } }, "×");
+  pill.append(open, skip);
+}
 
 /** el holding text, with the first occurrence of q marked */
 function withMatch(el, text, q) {
@@ -1005,7 +1222,7 @@ function drawPlot(runs, exportTheme) {
   const theme = exportTheme || {
     text: cssVar("--text"), text2: cssVar("--text-2"), text3: cssVar("--text-3"), line: cssVar("--line"), line2: cssVar("--line-2"),
     bg: cssVar("--bg"), heat: cssVar("--heat"), warm: cssVar("--warm"), cool: cssVar("--cool"), para: cssVar("--para"), warnSoft: cssVar("--warn-soft"),
-    zero: cssVar("--zero"), model: cssVar("--model"),
+    zero: cssVar("--zero"), model: cssVar("--model"), mark: cssVar("--mark"),
   };
   const multi = runs.length > 1;
   const comps = s.comp === "both" ? ["in", "out"] : [s.comp];
@@ -1058,7 +1275,8 @@ function drawPlot(runs, exportTheme) {
           // the measured curve (sample or empty holder) …
           const ym = idx.map((i) => (sr.dry ? sr.y[i] : sr.raw[i]));
           const g1 = segName + compTag + (sr.dry ? " (measured)" : " (raw)");
-          addTrace({ x: xs, y: ym, customdata: cd, type: "scatter", mode: sr.dry ? "markers" : s.markers ? "lines+markers" : "lines", isData: true,
+          addTrace({ x: xs, y: ym, customdata: cd, type: "scatter", mode: sr.dry ? "markers" : s.markers || pointsShown ? "lines+markers" : "lines", isData: true,
+            baseMode: sr.dry ? "markers" : s.markers ? "lines+markers" : "lines", rows: idx, runId: run.id, comp,
             line: { color, width: s.markers ? 1 : 1.6, dash }, marker: { color, symbol: "square", size: s.markers && !sr.dry ? 4.5 : 3, opacity: sr.dry ? 0.55 : 1 }, baseSize: s.markers && !sr.dry ? 4.5 : 3,
             yaxis, hovertemplate: hover, legendgroup: group }, g1, full(g1));
           if (multi && comp === labelComp && !sr.dry) tagTargets.push({ run, color, xs, ys: ym, yaxis });
@@ -1082,7 +1300,8 @@ function drawPlot(runs, exportTheme) {
         }
         const yv = idx.map((i) => sr.y[i]);
         const g = segName + compTag + (sr.uncorrected ? " (uncorrected)" : "");
-        addTrace({ x: xs, y: yv, customdata: cd, type: "scatter", mode: s.markers ? "lines+markers" : "lines", isData: true,
+        addTrace({ x: xs, y: yv, customdata: cd, type: "scatter", mode: s.markers || pointsShown ? "lines+markers" : "lines", isData: true,
+          baseMode: s.markers ? "lines+markers" : "lines", rows: idx, runId: run.id, comp,
           line: { color, width: s.markers ? (outBoth ? 0.8 : 1) : (outBoth ? 1.3 : 2), dash }, marker: { color, symbol: "square", size: 4.5 }, baseSize: 4.5,
           opacity: outBoth ? 0.75 : 1, yaxis, hovertemplate: hover, legendgroup: group }, g, full(g));
         if (multi && comp === labelComp) tagTargets.push({ run, color, xs, ys: yv, yaxis });
@@ -1140,6 +1359,18 @@ function drawPlot(runs, exportTheme) {
             legendgroup: run.id + "model" }, "mineral model", name);
           paraTargets.push({ run, color: theme.model, xs: xm, ys: ym, yaxis, text: mi.name, hover: name, model: true });
         }
+      }
+      // the user's annotations on this curve (Alt + click a point), where they were put
+      const fm = notesFileFor(run);
+      for (const m of (fm && fm.marks[run.stem]) || []) {
+        if (m.comp !== comp || m.i >= sr.temp.length) continue;
+        if (!s[sr.segment[m.i] === "cooling" ? "cooling" : "heating"]) continue;
+        const ys = !sr.dry && view === "raw" ? sr.raw : sr.y, y = ys[m.i];
+        if (y == null || !Number.isFinite(y)) continue;
+        annotations.push({ name: `mark:${run.stem}:${m.id}`, x: sr.temp[m.i], y, xref: "x", yref: yaxis, text: esc(m.text),
+          showarrow: true, arrowhead: 0, arrowwidth: 1.2, arrowcolor: theme.mark, ax: m.ax, ay: m.ay, standoff: 3,
+          font: { size: 11, color: theme.text }, bgcolor: theme.bg, bordercolor: theme.mark, borderwidth: 1, borderpad: 3,
+          captureevents: !exportTheme, hovertext: "Drag to move · Alt + click to edit" });
       }
       // Hopkinson peaks show most clearly in the out-of-phase curve, so both components
       // are searched; each is labelled on the curve that shows it
@@ -1256,7 +1487,7 @@ function drawPlot(runs, exportTheme) {
     return { data: traces, layout };
   }
   Plotly.react("plot", traces, layout, {
-    responsive: true, displaylogo: false, scrollZoom: true, doubleClick: "autosize",
+    responsive: true, displaylogo: false, scrollZoom: true, doubleClick: "autosize", edits: { annotationTail: true },
     modeBarButtonsToRemove: ["lasso2d", "select2d", "autoScale2d", "toImage", "zoom2d", "pan2d"],
   });
   const gd = $("#plot");
@@ -1274,6 +1505,33 @@ function drawPlot(runs, exportTheme) {
     gd.on("plotly_clickannotation", (ev) => {
       const name = ev.annotation && ev.annotation.name;
       if (name && name.startsWith("ref:")) { $$(".plot-wrap .ref-preview").forEach((e) => e.remove()); zoomToTemp(+name.slice(4)); }
+      if (name && name.startsWith("mark:") && ev.event && ev.event.altKey) {
+        const found = findMark(name);
+        if (found) openMarkEditor(found.run, found.mark.comp, found.mark.i, ev.event.clientX, ev.event.clientY, found.mark);
+      }
+    });
+    // a point clicked: the target of a note link being made, or (with Alt) a new annotation
+    gd.on("plotly_click", (ev) => {
+      const pt = ev.points && ev.points.find((q) => q.data && q.data.rows);
+      if (!pt) return;
+      const run = state.runs.get(pt.data.runId), i = pt.data.rows[pt.pointIndex], comp = pt.data.comp;
+      if (!run || i == null) return;
+      const t = (comp === "out" ? run.curveIm : run.curve).rows[i].temp;
+      if (linking) {
+        setLink(linking.run, linking.item, { stem: run.stem, i, comp, t: Math.round(t * 10) / 10 });
+        toast(`Linked “${linking.item}” to ${fmtT(t)} °C${run.id !== linking.run.id ? ` on ${run.stem}` : ""} – Alt + click it in the notes to jump there`);
+        endLink();
+        return;
+      }
+      if (ev.event && ev.event.altKey) openMarkEditor(run, comp, i, ev.event.clientX, ev.event.clientY, null);
+    });
+    // a dragged annotation keeps its new place
+    gd.on("plotly_relayout", (ev) => {
+      for (const k of Object.keys(ev || {})) {
+        const m = /^annotations\[(\d+)\]\.(ax|ay)$/.exec(k);
+        const a = m && (gd.layout.annotations || [])[+m[1]];
+        if (a && a.name && a.name.startsWith("mark:")) moveMark(a.name, m[2], ev[k]);
+      }
     });
     // moving the plot clears the temperature label of the last jump
     gd.on("plotly_relayout", () => { $$(".plot-wrap .ref-temp, .plot-wrap .ref-preview").forEach((e) => e.remove()); updateJumpers(); updateMarkerSize(); });
@@ -1509,15 +1767,24 @@ function wireCrosshair() {
     box.style.left = Math.max(g.left - wr.left, Math.min(x - bw / 2, g.left - wr.left + g.w - bw)) + "px";
     box.style.top = g.top - wr.top + 4 + "px";
   };
-  wrap.addEventListener("mousemove", (e) => { lastX = e.clientX; if (e.altKey) show(e.clientX); else hide(); });
+  wrap.addEventListener("mousemove", (e) => {
+    lastX = e.clientX;
+    if (e.altKey) { show(e.clientX); setPointsShown(true); } else { hide(); if (!editor) setPointsShown(false); }
+  });
   wrap.addEventListener("mouseleave", () => { lastX = null; hide(); });
   addEventListener("keydown", (e) => {
     if (e.key !== "Alt") return;
     e.preventDefault();                       // no menu activation from a lone Alt
-    if (lastX != null) show(lastX);
-    if (peek) showPeek();
+    if (lastX != null) { show(lastX); setPointsShown(true); }
+    if (peek && peekOver) showPeek();
   });
-  addEventListener("keyup", (e) => { if (e.key === "Alt") { e.preventDefault(); hide(); hidePeek(); } });
+  // Alt released: the readout, the notes panel and an untouched annotation box go away
+  addEventListener("keyup", (e) => {
+    if (e.key !== "Alt") return;
+    e.preventDefault();
+    hide(); hidePeek(); setPointsShown(false);
+    if (editor && !editor.locked) closeEditor();
+  });
   addEventListener("blur", () => { hide(); hidePeek(); });
 }
 
@@ -1963,7 +2230,7 @@ function sourcesText(base, items) {
 async function exportPng() {
   const runs = state.selected.map((id) => state.runs.get(id)).filter(Boolean);
   if (!runs.length) return;
-  const light = { text: "#1c2027", text2: "#5b6370", text3: "#8a919c", line: "#e3e6ea", line2: "#c9ced6", bg: "#ffffff", heat: "#9f1d22", warm: "#1e3a8a", cool: "#2b8cee", para: "#7c3aed", warnSoft: "#fff4e0", zero: "#1c2027", model: "#0f766e" };
+  const light = { text: "#1c2027", text2: "#5b6370", text3: "#8a919c", line: "#e3e6ea", line2: "#c9ced6", bg: "#ffffff", heat: "#9f1d22", warm: "#1e3a8a", cool: "#2b8cee", para: "#7c3aed", warnSoft: "#fff4e0", zero: "#1c2027", model: "#0f766e", mark: "#b45309" };
   const fig = drawPlot(runs, light);
   const name = (runs.length === 1 ? runs[0].stem : `${runs[0].stem}+${runs.length - 1}`) + `_${state.s.view}.png`;
   const target = await api.saveDialog({ title: "Save plot", defaultPath: L.joinPath(L.outputDir(runs[0].dir), name), filters: [{ name: "PNG image", extensions: ["png"] }] });
@@ -2063,6 +2330,7 @@ function wire() {
     const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName) && document.activeElement.id !== "tree";
     if (e.key === "Escape") {
       if (menuEl) { closeMenu(); return; }
+      if (linking) { endLink(); setStatus("Link cancelled"); return; }
       if (!typing && !$("#viewer").classList.contains("hidden")) { e.preventDefault(); resetZoom(); return; }
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o") { e.preventDefault(); pickAndOpen(); return; }
@@ -2126,6 +2394,7 @@ function wire() {
   wire();
   applyTheme();
   renderViewer();
+  checkForUpdate();
   const start = await api.startupPath();
   if (start && L.isCurveFile(start)) {
     await openFolder(L.dirname(start));

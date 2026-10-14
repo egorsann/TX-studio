@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("api", {
   writeBase64: (p, b64) => ipcRenderer.invoke("write-base64", p, b64),
   reveal: (p) => ipcRenderer.invoke("reveal", p),
   openPath: (p) => ipcRenderer.invoke("open-path", p),
+  openUrl: (u) => ipcRenderer.invoke("open-url", u),
   getSettings: () => ipcRenderer.invoke("settings-get"),
   setSettings: (patch) => ipcRenderer.invoke("settings-set", patch),
   setTheme: (t) => ipcRenderer.invoke("set-theme", t),

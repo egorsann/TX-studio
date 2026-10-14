@@ -32,6 +32,7 @@
     writeBase64: call("writeBase64"),
     reveal: call("reveal"),
     openPath: call("openPath"),
+    openUrl: call("openUrl"),
     getSettings: call("getSettings"),
     setSettings: call("setSettings"),
     setTheme: call("setTheme"),

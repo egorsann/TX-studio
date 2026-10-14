@@ -181,6 +181,7 @@ ipcMain.handle("write-base64", async (_e, p, b64) => {
 });
 ipcMain.handle("reveal", (_e, p) => shell.showItemInFolder(p));
 ipcMain.handle("open-path", (_e, p) => shell.openPath(p));
+ipcMain.handle("open-url", (_e, u) => (String(u).toLowerCase().startsWith("https://") ? shell.openExternal(u) : Promise.reject(new Error("not an https address"))));
 ipcMain.handle("settings-get", () => loadSettings());
 ipcMain.handle("settings-set", (_e, patch) => { const s = { ...loadSettings(), ...patch }; saveSettings(s); return s; });
 ipcMain.handle("set-theme", (_e, theme) => {
@@ -197,8 +198,9 @@ ipcMain.handle("watch", (_e, root) => {
   if (!root) return false;
   let timer = null;
   try {
-    watcher = fs.watch(root, { recursive: true }, (_ev, file) => {
+    watcher = fs.watch(root, { recursive: true }, (ev, file) => {
       if (file && !/\.(cur|clw|kht|klt)$/i.test(file) && path.extname(file)) return;
+      if (file && !path.extname(file) && ev === "change") return;     // a folder's timestamp (a file in it was written)
       clearTimeout(timer);
       timer = setTimeout(() => win && win.webContents.send("fs-changed"), 800);
     });

@@ -18,6 +18,7 @@
   --cool: #2b8cee;
   --para: #7c3aed;
   --model: #0f766e;
+  --mark: #b45309;
   --zero: #1c2027;
   --ht: #c2410c;
   --ht-soft: #fdebe1;
@@ -55,6 +56,7 @@
   --cool: #5cc8ff;
   --para: #b197fc;
   --model: #2dd4bf;
+  --mark: #fbbf24;
   --zero: #f1f3f5;
   --ht: #fb923c;
   --ht-soft: #3a2316;
@@ -435,12 +437,19 @@ select:focus, .num input:focus { outline: 0; border-color: var(--accent); box-sh
 
 /* ---------------------------------------------------------------- notes (Alt + hover) */
 .note-peek {
-  position: fixed; z-index: 50; pointer-events: none; min-width: 180px; max-width: 460px; padding: 8px 12px; border-radius: 8px;
+  position: fixed; z-index: 50; min-width: 180px; max-width: 460px; padding: 8px 12px; border-radius: 8px;
   background: var(--bg); border: 1px solid var(--line-2); box-shadow: var(--shadow); font-size: 12.5px;
 }
 .note-peek-head { font-size: 11.5px; font-weight: 650; color: var(--text-2); margin-bottom: 4px; }
-.note-peek-item { padding: 3px 0; }
+.note-peek-item { display: flex; align-items: center; gap: 8px; padding: 3px 4px; margin: 0 -4px; border-radius: 4px; cursor: pointer; }
 .note-peek-item + .note-peek-item { border-top: 1px solid var(--line); }
+.note-peek-item:hover { background: color-mix(in srgb, var(--mark) 14%, transparent); }
+.note-peek-text { flex: 1; min-width: 0; }
+.note-peek-link { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.note-peek-item.linked .note-peek-link { color: var(--mark); font-weight: 600; }
+.note-peek-x { border: 0; background: transparent; color: var(--text-3); cursor: pointer; padding: 0 2px; font-size: 13px; line-height: 1; }
+.note-peek-x:hover { color: var(--bad); }
+.note-peek-hint { margin-top: 6px; font-size: 11px; color: var(--text-3); }
 
 /* ---------------------------------------------------------------- mineral model */
 .model-box { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
@@ -455,3 +464,30 @@ select:focus, .num input:focus { outline: 0; border-color: var(--accent); box-sh
   width: 100%; box-sizing: border-box; height: 24px; padding: 0 4px; text-align: right; font: inherit; font-size: 12px;
   color: var(--text); background: var(--bg); border: 1px solid var(--line-2); border-radius: 5px;
 }
+
+/* ---------------------------------------------------------------- annotations, links */
+.mark-editor {
+  position: absolute; z-index: 8; width: 260px; padding: 8px 10px; border-radius: 8px;
+  background: var(--bg); border: 1px solid var(--mark); box-shadow: var(--shadow);
+}
+.mark-ed-head { font-size: 11.5px; font-weight: 650; color: var(--text-2); margin-bottom: 6px; }
+.mark-input {
+  width: 100%; box-sizing: border-box; height: 28px; padding: 0 8px; font: inherit; font-size: 12.5px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--line-2); border-radius: 6px; margin-bottom: 4px;
+}
+.mark-input:focus { outline: 0; border-color: var(--mark); box-shadow: 0 0 0 3px color-mix(in srgb, var(--mark) 22%, transparent); }
+.mark-del { margin-top: 6px; }
+.link-banner {
+  position: absolute; z-index: 6; top: 10px; left: 50%; transform: translateX(-50%); white-space: nowrap; pointer-events: none;
+  padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600;
+  background: var(--mark); color: #1c2027; box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+}
+
+/* ---------------------------------------------------------------- update notice */
+.update-pill { display: inline-flex; align-items: center; margin-right: 6px; border-radius: 12px; border: 1px solid var(--sel-line); background: var(--accent-soft); overflow: hidden; }
+.update-pill.hidden { display: none; }
+.update-pill button { border: 0; background: transparent; font: inherit; font-size: 12px; color: var(--text); cursor: pointer; line-height: 22px; }
+.update-open { padding: 0 4px 0 10px; font-weight: 600; }
+.update-open::before { content: "↑ "; color: var(--accent); }
+.update-skip { padding: 0 8px 0 4px; color: var(--text-3) !important; }
+.update-pill button:hover { color: var(--accent); }

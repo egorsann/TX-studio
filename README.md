@@ -24,7 +24,9 @@ That's it: TX Studio is copied to `%LOCALAPPDATA%\Programs\TX Studio`, gets a
   lacks it, the app offers the download).
 * If Windows shows *"Windows protected your PC"*: **More info → Run anyway** (the app
   isn't code-signed). Happens once.
-* **Update:** download the newer zip and run `Install TX Studio.cmd` again.
+* **Update:** the app checks GitHub for a newer release (at most every 6 hours) and shows a
+  small *Update* pill in the top bar; it opens the download page — run `Install TX Studio.cmd`
+  from the new zip.
 * **Uninstall:** `Uninstall TX Studio.cmd` in `%LOCALAPPDATA%\Programs\TX Studio`.
 * Don't want to install? Double-click `TX Studio.exe` in the unzipped folder instead.
 * Settings (last folder, choices) are kept per user in `%APPDATA%\TX Studio`.
@@ -48,7 +50,10 @@ cryostat (`.clw`) — with the measurement date from the instrument record (`.KH
 * **Notes** classify each run at a glance: type them in the inspector, items separated by
   `;` (or click a tag — paramagnetic, magnetite, hematite, pyrrhotite, Verwey, Morin, …).
   They show faded after the run's name; **Alt + hover** lists them one item per line. The
-  filter box searches them too. They are kept in a small `<specimen>_notes.json` beside the
+  filter box searches them too.
+* **Links:** in that Alt panel, Alt + click an item, then click the point of the curve it
+  belongs to. Afterwards Alt + click on the item zooms there (Alt + Shift + click links it
+  anew, × removes the link). They are kept in a small `<specimen>_notes.json` beside the
   raw folder (`AB24CD101_TX/AB24CD101_TX_notes.json`), so they travel with the data.
 * The folder that holds the runs is bold; single-child folders are compacted
   (`AB24CD101_TX / AB24CD101_TX_raw`); exported `_corr` folders are hidden (filter menu).
@@ -104,7 +109,11 @@ to the full curve.
   transition is; click to jump there. Low-T plots always show **‹ Besnus 30–34 K** at the cold
   edge — pyrrhotite's transition lies below what the cryostat reaches.
 * **Alt** held over the plot: a faint line at the mouse reads the temperature and every
-  curve's χ and measuring time there.
+  curve's χ and measuring time there, and the measurement points show.
+* **Annotations:** Alt + click a point opens a small text box (it stays while Alt is held;
+  click into it, type, Enter). The label is placed clear of the curves with a thin line to
+  its point; drag it anywhere, Alt + click it to edit or delete. Annotations and links are
+  kept in the run's `_notes.json`.
 
 **Mouse:** right-drag = zoom box (a flat box zooms temperature only, a narrow one χ only),
 left- or middle-drag = pan, wheel = zoom. Views: corrected, raw vs empty holder,

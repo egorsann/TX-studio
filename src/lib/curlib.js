@@ -719,22 +719,35 @@
   }
 
   /** Notes file text: JSON with every non-ASCII character escaped, so it survives the
-   *  Latin-1 file I/O unchanged. */
-  function notesText(notes) {
-    const sorted = {};
-    for (const k of Object.keys(notes).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) if (notes[k]) sorted[k] = notes[k];
-    const doc = { app: "TX Studio", about: "Notes per specimen piece, edited in TX Studio", notes: sorted };
-    return JSON.stringify(doc, null, 2).replace(/[\u007f-￿]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")) + "\r\n";
+   *  Latin-1 file I/O unchanged. file: { notes: {stem: text}, marks: {stem: [mark]},
+   *  links: {stem: {item: target}} } -- marks are annotations on the plot, links tie a
+   *  note item to a point of a curve. */
+  function notesText(file) {
+    const byName = (o, keep) => {
+      const out = {};
+      for (const k of Object.keys(o || {}).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) if (keep(o[k])) out[k] = o[k];
+      return out;
+    };
+    const doc = { app: "TX Studio", about: "Notes per run, plot annotations and links, edited in TX Studio",
+      notes: byName(file.notes, (v) => !!v),
+      marks: byName(file.marks, (v) => Array.isArray(v) && v.length),
+      links: byName(file.links, (v) => v && Object.keys(v).length) };
+    return JSON.stringify(doc, null, 2).replace(/[\u007f-\uffff]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")) + "\r\n";
   }
 
-  /** -> notes object, or null when the text is not a TX Studio notes file. */
+  /** -> { notes, marks, links }, or null when the text is not a TX Studio notes file. */
   function parseNotes(text) {
     try {
       const d = JSON.parse(text);
       if (!d || typeof d !== "object" || !d.notes || typeof d.notes !== "object" || Array.isArray(d.notes)) return null;
-      const out = {};
-      for (const [k, v] of Object.entries(d.notes)) if (typeof v === "string" && v.trim()) out[k] = v;
-      return out;
+      const notes = {}, marks = {}, links = {};
+      for (const [k, v] of Object.entries(d.notes)) if (typeof v === "string" && v.trim()) notes[k] = v;
+      for (const [k, v] of Object.entries(d.marks || {})) {
+        const ok = Array.isArray(v) ? v.filter((m) => m && typeof m.text === "string" && Number.isInteger(m.i)) : [];
+        if (ok.length) marks[k] = ok;
+      }
+      for (const [k, v] of Object.entries(d.links || {})) if (v && typeof v === "object" && !Array.isArray(v)) links[k] = v;
+      return { notes, marks, links };
     } catch { return null; }
   }
 

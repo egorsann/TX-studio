@@ -30,7 +30,7 @@ namespace TXStudio
 {
     static class Program
     {
-        public const string Version = "0.7.4.0";
+        public const string Version = "0.8.0.0";
 
         [STAThread]
         static void Main(string[] args)
@@ -270,6 +270,13 @@ namespace TXStudio
                 case "writeBase64": { var p = Str(a, 0); var b = Str(a, 1) ?? ""; return Task.Run(() => { Write(p, Convert.FromBase64String(b)); return (object)true; }); }
                 case "reveal": Process.Start("explorer.exe", "/select,\"" + Str(a, 0) + "\""); return Done(null);
                 case "openPath": Process.Start(new ProcessStartInfo(Str(a, 0)) { UseShellExecute = true }); return Done("");
+                case "openUrl":     // web pages only (the download page of a newer release)
+                {
+                    var u = Str(a, 0);
+                    if (u == null || !u.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("not an https address");
+                    Process.Start(new ProcessStartInfo(u) { UseShellExecute = true });
+                    return Done(null);
+                }
                 case "getSettings": return Done(LoadSettings());
                 case "setSettings": return Done(MergeSettings(a.Length > 0 ? a[0] as Dictionary<string, object> : null));
                 case "setTheme": return Done(SetTheme(Str(a, 0)));
@@ -407,6 +414,9 @@ namespace TXStudio
                 {
                     var ext = Path.GetExtension(e.Name ?? "");
                     if (ext.Length > 0 && !RunFile.IsMatch(e.Name)) return;
+                    // a folder's own timestamp changes whenever a file in it is written (e.g.
+                    // the notes file) -- only folders appearing / disappearing matter
+                    if (ext.Length == 0 && e.ChangeType == WatcherChangeTypes.Changed) return;
                     BeginInvoke(new Action(() => { watchTimer.Stop(); watchTimer.Start(); }));
                 };
                 watcher.Created += changed;
