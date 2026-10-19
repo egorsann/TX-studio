@@ -30,7 +30,7 @@ namespace TXStudio
 {
     static class Program
     {
-        public const string Version = "0.8.1.0";
+        public const string Version = "0.8.2.0";
 
         [STAThread]
         static void Main(string[] args)
@@ -270,6 +270,9 @@ namespace TXStudio
                 case "writeBase64": { var p = Str(a, 0); var b = Str(a, 1) ?? ""; return Task.Run(() => { Write(p, Convert.FromBase64String(b)); return (object)true; }); }
                 case "reveal": Process.Start("explorer.exe", "/select,\"" + Str(a, 0) + "\""); return Done(null);
                 case "openPath": Process.Start(new ProcessStartInfo(Str(a, 0)) { UseShellExecute = true }); return Done("");
+                case "renameDir": { var f = Str(a, 0); var t = Str(a, 1); return Task.Run(() => { RenameHolderDir(f, t); return (object)true; }); }
+                case "renameFiles": { var pairs = Arr(a.Length > 0 ? a[0] : null); return Task.Run(() => { RenameRunFiles(pairs); return (object)true; }); }
+                case "organizeRuns": { var d = Str(a, 0); var raw = Str(a, 1); var corr = Str(a, 2); return Task.Run(() => (object)OrganizeRuns(d, raw, corr)); }
                 case "openUrl":     // web pages only (the download page of a newer release)
                 {
                     var u = Str(a, 0);
@@ -388,6 +391,61 @@ namespace TXStudio
             const int WM_SYSCOMMAND = 0x0112, SC_KEYMENU = 0xF100;
             if (m.Msg == WM_SYSCOMMAND && ((int)m.WParam & 0xFFF0) == SC_KEYMENU && m.LParam == IntPtr.Zero) return;
             base.WndProc(ref m);
+        }
+
+        // ------------------------------------------------------------------ tidying a data folder
+        // Asked for in the app (Yes / No) before anything happens; nothing is deleted or
+        // overwritten -- folders and files are only renamed or moved one level down.
+        static readonly Regex HolderDirName = new Regex(@"^TX_holder_correction_\d{8}$");
+
+        /** An empty-holder folder gets its standard name, in the same parent folder. */
+        static void RenameHolderDir(string from, string to)
+        {
+            if (from == null || to == null || !Directory.Exists(from)) throw new ArgumentException("no such folder: " + from);
+            var src = Path.GetFullPath(from).TrimEnd('\\'); var dst = Path.GetFullPath(to).TrimEnd('\\');
+            if (!string.Equals(Path.GetDirectoryName(src), Path.GetDirectoryName(dst), StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("a folder is only renamed in place");
+            if (!HolderDirName.IsMatch(NameOf(dst))) throw new ArgumentException("not an empty-holder folder name: " + NameOf(dst));
+            if (Directory.Exists(dst) || File.Exists(dst)) throw new IOException(NameOf(dst) + " already exists");
+            Directory.Move(src, dst);
+        }
+
+        /** Run files (.cur .clw .KHT .KLT) renamed within their folder; all checked first. */
+        static void RenameRunFiles(object[] pairs)
+        {
+            var todo = new List<Tuple<string, string>>();
+            foreach (var o in pairs)
+            {
+                var p = Arr(o);
+                if (p == null || p.Length != 2) throw new ArgumentException("bad rename");
+                var src = Path.GetFullPath((string)p[0]); var dst = Path.GetFullPath((string)p[1]);
+                if (!File.Exists(src)) throw new ArgumentException("no such file: " + src);
+                if (!string.Equals(Path.GetDirectoryName(src), Path.GetDirectoryName(dst), StringComparison.OrdinalIgnoreCase))
+                    throw new ArgumentException("a file is only renamed in place");
+                if (!RunFile.IsMatch(src) || !RunFile.IsMatch(dst)) throw new ArgumentException("only run files are renamed");
+                if (File.Exists(dst) || Directory.Exists(dst)) throw new IOException(Path.GetFileName(dst) + " already exists");
+                todo.Add(Tuple.Create(src, dst));
+            }
+            foreach (var t in todo) File.Move(t.Item1, t.Item2);
+        }
+
+        /** The run files lying in a specimen folder move into its <spec>_TX_raw folder, and
+         *  <spec>_TX_corr is made next to it. -> the moved files' new paths */
+        static List<string> OrganizeRuns(string dir, string rawName, string corrName)
+        {
+            if (dir == null || !Directory.Exists(dir)) throw new ArgumentException("no such folder: " + dir);
+            Func<string, string, bool> ok = (n, suffix) => n != null && n.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
+                && n.IndexOfAny(Path.GetInvalidFileNameChars()) < 0 && n.Trim('.').Length > suffix.Length;
+            if (!ok(rawName, "_raw") || !ok(corrName, "_corr")) throw new ArgumentException("bad folder names");
+            var raw = Path.Combine(dir, rawName); var corr = Path.Combine(dir, corrName);
+            var files = Directory.GetFiles(dir).Where(f => RunFile.IsMatch(f)).ToList();
+            foreach (var f in files)
+                if (File.Exists(Path.Combine(raw, Path.GetFileName(f)))) throw new IOException(Path.GetFileName(f) + " already exists in " + rawName);
+            Directory.CreateDirectory(raw);
+            Directory.CreateDirectory(corr);
+            var moved = new List<string>();
+            foreach (var f in files) { var to = Path.Combine(raw, Path.GetFileName(f)); File.Move(f, to); moved.Add(to); }
+            return moved;
         }
 
         string StartupPath()

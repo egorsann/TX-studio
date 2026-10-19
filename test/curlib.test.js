@@ -133,6 +133,25 @@ test("notes file keeps notes, plot annotations and links; ASCII only; older file
   assert.equal(L.parseNotes('{"something": "else"}'), null);
 });
 
+test("folder housekeeping: dates in names, standard holder names, raw / corr folders, ID typos", () => {
+  const iso = (t) => new Date(t).toISOString().slice(0, 10);
+  assert.equal(iso(L.dateFromName("20261013")), "2026-10-13");
+  assert.equal(iso(L.dateFromName("TX_holder_correction_260901")), "2026-09-01");
+  assert.equal(iso(L.dateFromName("TX_holder_correction_2026_260224")), "2026-02-24");
+  assert.equal(L.dateFromName("AB24CD105-1H1"), null);
+  assert.equal(L.dateFromName("20261399"), null);
+  const t = L.dateFromName("20261013");
+  assert.equal(L.holderDirName(t), "TX_holder_correction_20261013");
+  assert.equal(L.holderFileStem("HT", t), "DRHOTSTUFF261013");
+  assert.equal(L.holderFileStem("LT", t), "MRFREEZE20261013");
+  assert.deepEqual(L.specimenSubdirs("AB24CD105_TX"), { spec: "AB24CD105", raw: "AB24CD105_TX_raw", corr: "AB24CD105_TX_corr" });
+  assert.ok(L.missingLetters("AB24105", "AB24CD105"));
+  assert.ok(!L.missingLetters("AB24CD105", "AB24CD105") && !L.missingLetters("XY26005", "AB24CD105"));
+  // a run in a dated folder inside holder_corrections is an empty holder
+  assert.ok(L.looksLikeDryRun({ stem: "20261013_HT", dir: "C:/d/holder_corrections/20261013" }, null));
+  assert.ok(!L.looksLikeDryRun({ stem: "AB24CD105-1H1", dir: "C:/d/AB24CD105_TX" }, null));
+});
+
 test("fixed-width parse copes with touching columns", () => {
   const txt = "  TEMP    TSUSC     CSUSC NSUSC       BULKS    FERRT    FERRB   TIMERHOTSTUFF\n" +
               "  26.6    -43.7     -0.66-0.019         0.0      0.0      0.0      0      0.0\n";

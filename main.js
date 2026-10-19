@@ -180,6 +180,40 @@ ipcMain.handle("write-base64", async (_e, p, b64) => {
   return true;
 });
 ipcMain.handle("reveal", (_e, p) => shell.showItemInFolder(p));
+// tidying a data folder (asked first in the app): renames in place, moves one level down,
+// never deletes or overwrites -- same guards as the Windows host
+const RUN_FILE = /\.(cur|clw|kht|klt)$/i;
+ipcMain.handle("rename-dir", async (_e, from, to) => {
+  const src = path.resolve(from), dst = path.resolve(to);
+  if (path.dirname(src).toLowerCase() !== path.dirname(dst).toLowerCase()) throw new Error("a folder is only renamed in place");
+  if (!/^TX_holder_correction_\d{8}$/.test(path.basename(dst))) throw new Error("not an empty-holder folder name");
+  if (fs.existsSync(dst)) throw new Error(path.basename(dst) + " already exists");
+  await fsp.rename(src, dst);
+  return true;
+});
+ipcMain.handle("rename-files", async (_e, pairs) => {
+  const todo = pairs.map(([a, b]) => [path.resolve(a), path.resolve(b)]);
+  for (const [a, b] of todo) {
+    if (!fs.existsSync(a)) throw new Error("no such file: " + a);
+    if (path.dirname(a).toLowerCase() !== path.dirname(b).toLowerCase()) throw new Error("a file is only renamed in place");
+    if (!RUN_FILE.test(a) || !RUN_FILE.test(b)) throw new Error("only run files are renamed");
+    if (fs.existsSync(b)) throw new Error(path.basename(b) + " already exists");
+  }
+  for (const [a, b] of todo) await fsp.rename(a, b);
+  return true;
+});
+ipcMain.handle("organize-runs", async (_e, dir, rawName, corrName) => {
+  const ok = (n, suffix) => typeof n === "string" && n.toLowerCase().endsWith(suffix) && !/[\\/:*?"<>|]/.test(n) && n.length > suffix.length;
+  if (!ok(rawName, "_raw") || !ok(corrName, "_corr")) throw new Error("bad folder names");
+  const raw = path.join(dir, rawName), corr = path.join(dir, corrName);
+  const files = (await fsp.readdir(dir, { withFileTypes: true })).filter((e) => e.isFile() && RUN_FILE.test(e.name)).map((e) => e.name);
+  for (const f of files) if (fs.existsSync(path.join(raw, f))) throw new Error(f + " already exists in " + rawName);
+  await fsp.mkdir(raw, { recursive: true });
+  await fsp.mkdir(corr, { recursive: true });
+  const moved = [];
+  for (const f of files) { await fsp.rename(path.join(dir, f), path.join(raw, f)); moved.push(path.join(raw, f)); }
+  return moved;
+});
 ipcMain.handle("open-path", (_e, p) => shell.openPath(p));
 ipcMain.handle("open-url", (_e, u) => (String(u).toLowerCase().startsWith("https://") ? shell.openExternal(u) : Promise.reject(new Error("not an https address"))));
 ipcMain.handle("settings-get", () => loadSettings());

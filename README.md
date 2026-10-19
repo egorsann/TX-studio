@@ -64,6 +64,21 @@ cryostat (`.clw`) — with the measurement date from the instrument record (`.KH
 File names are expected to start with the specimen ID and end with the run code
 (`H1`, `L1`, `L2`, …), e.g. `AB24CD101-27H1.cur`.
 
+**New data:** when a folder is opened (or new folders appear in it), TX Studio offers —
+one Yes / No pop-up each, showing the paths — to bring it into the lab's layout:
+
+* an empty-holder folder in `holder_corrections` gets the name
+  `TX_holder_correction_YYYYMMDD`, and runs not named like the instrument names them
+  become `DRHOTSTUFF<YYMMDD>` / `MRFREEZE<YYYYMMDD>` (so `cureval_correct.py` finds them too);
+* a specimen folder with its runs lying directly in it gets them moved into
+  `<SPEC>_TX_raw`, with an empty `<SPEC>_TX_corr` next to it;
+* a run whose specimen ID is the folder's with letters missing (`AB24D101-27L1` in
+  `AB24CD101_TX`) is renamed.
+
+Nothing is deleted or overwritten; "No" isn't asked again. Empty holders are recognised in
+any folder inside `holder_corrections`, and one without `.KHT`/`.KLT` record takes its
+measuring date from its name (`20261013`, `261013`), so it's paired by time like the others.
+
 <br clear="right">
 
 ### Automatic empty-holder correction

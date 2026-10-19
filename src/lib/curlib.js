@@ -200,7 +200,44 @@
   function looksLikeDryRun(run, record) {
     if (record && /^empty$/i.test((record.note || "").trim())) return true;
     if (DRY_NAME_RE.test(run.stem)) return true;
-    return DRY_DIR_RE.test(basename(run.dir));
+    // in a holder folder, or in a dated folder inside one (holder_corrections/20261013/)
+    return DRY_DIR_RE.test(basename(run.dir)) || DRY_DIR_RE.test(basename(dirname(run.dir)));
+  }
+
+  // ------------------------------------------------------------------ folder housekeeping
+  /** The date written in a name -- 20261013 (YYYYMMDD) or 260901 (YYMMDD); the last such
+   *  number counts ("TX_holder_correction_2026_260224" -> 24 Feb 2026). -> ms (noon) or null */
+  function dateFromName(name) {
+    const hits = String(name).match(/(?<!\d)(\d{8}|\d{6})(?!\d)/g);
+    if (!hits) return null;
+    const s = hits[hits.length - 1], full = s.length === 8 ? s : "20" + s;
+    const y = +full.slice(0, 4), m = +full.slice(4, 6), d = +full.slice(6, 8);
+    if (y < 2000 || y > 2099 || m < 1 || m > 12 || d < 1 || d > 31) return null;
+    const t = new Date(y, m - 1, d, 12);
+    return t.getMonth() === m - 1 ? t.getTime() : null;
+  }
+  const ymd = (t, full) => {
+    const d = new Date(t), y = String(d.getFullYear());
+    return (full ? y : y.slice(2)) + String(d.getMonth() + 1).padStart(2, "0") + String(d.getDate()).padStart(2, "0");
+  };
+  /** Standard name of an empty-holder folder measured on t: TX_holder_correction_YYYYMMDD */
+  function holderDirName(t) { return "TX_holder_correction_" + ymd(t, true); }
+  /** Standard stem of an empty-holder run, as the instrument names them: DRHOTSTUFF261013
+   *  (furnace) / MRFREEZE20261013 (cryostat). */
+  function holderFileStem(kind, t) { return kind === "HT" ? "DRHOTSTUFF" + ymd(t, false) : "MRFREEZE" + ymd(t, true); }
+  /** A specimen folder's raw / corrected subfolders (the layout cureval_correct.py makes):
+   *  AB24CD105_TX -> AB24CD105_TX_raw, AB24CD105_TX_corr */
+  function specimenSubdirs(folderName) {
+    const spec = String(folderName).replace(/_TX$/i, "");
+    return { spec, raw: spec + "_TX_raw", corr: spec + "_TX_corr" };
+  }
+  /** True when fileSpec is folderSpec with 1-3 letters missing (AB24105 vs AB24CD105). */
+  function missingLetters(fileSpec, folderSpec) {
+    const a = String(fileSpec).toLowerCase(), b = String(folderSpec).toLowerCase();
+    if (a === b || a.length >= b.length || b.length - a.length > 3 || !a) return false;
+    let i = 0;
+    for (const c of b) if (i < a.length && c === a[i]) i++;
+    return i === a.length;
   }
 
   const RUN_RE = /^(.+?)[- ]?([HL]\d+)$/i;
@@ -755,6 +792,7 @@
 
   return {
     COL, REF_LINES, OFF_SCALE, MINERALS, MONZOGRANITE, HOPKINSON_WINDOWS,
+    dateFromName, holderDirName, holderFileStem, specimenSubdirs, missingLetters,
     basename, dirname, joinPath, extOf, stemOf, loose, isCurveFile, isRecordFile, kindOf, isIm, mainStem,
     parseCurve, parseRecord, findRecordPath, runId, groupRuns, looksLikeDryRun, runLabel, overlayTags,
     runningMean, holderValues, hasStoredSmoothing, storedSmoothingN, nearestIndex,

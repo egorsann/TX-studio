@@ -45,7 +45,7 @@ const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = se
 const DEFAULTS = {
   smoothN: 5, rule: "nearest", view: "corrected", comp: "in",
   heating: true, cooling: true, markers: false, refs: true, stored: false, para: false, paraTheta: 0,
-  model: false, modelMix: null, modelProps: {}, modelShift: {},
+  model: false, modelMix: null, modelProps: {}, modelShift: {}, tidyDeclined: {},
   onlyCurves: true, showCorr: false, showIm: false, theme: "system", sideW: 300, dryOpen: true,
   overrides: {}, dryOverrides: {}, holderSmooth: {}, paraPick: {}, expanded: {}, lastSel: {}, lastRoot: null,
 };
@@ -128,6 +128,10 @@ async function openFolder(root, { quiet = false } = {}) {
       const ov = state.s.dryOverrides[r.main];
       r.autoDry = !r.out && L.looksLikeDryRun(r, r.record);
       r.dry = ov != null ? ov : r.autoDry;
+      if (r.time == null) {
+        const t = L.dateFromName(r.stem) ?? L.dateFromName(L.basename(r.dir));
+        if (t != null) { r.time = t; r.timeFromName = true; }
+      }
       if (r.external && !r.dry) continue;          // outside the folder: only empty holders matter
       state.runs.set(r.id, r);
     }
@@ -159,6 +163,7 @@ async function openFolder(root, { quiet = false } = {}) {
     if (!sel.length) { const first = state.visible.find((id) => !state.runs.get(id).dry); if (first) sel = [first]; }
     select(sel, { scroll: true });
     setStatus(quiet ? "Folder changed — rescanned" : `Opened ${L.basename(root)}`);
+    tidyCheck();
   } catch (err) {
     console.error(err);
     setStatus("Could not read folder");
@@ -947,6 +952,146 @@ function showUpdate(latest, current) {
   pill.append(open, skip);
 }
 
+// ---------------------------------------------------------------------- tidying a data folder
+// After a folder is opened (and when new folders appear in it) the app offers, one Yes / No
+// pop-up at a time, to bring it into the lab's layout:
+//   empty-holder folders  -> holder_corrections/TX_holder_correction_YYYYMMDD, with runs
+//                            named like the instrument does (DRHOTSTUFF261013, MRFREEZE20261013)
+//   specimen folders      -> runs in <spec>_TX_raw, an empty <spec>_TX_corr next to it
+//   misspelled run names  -> AB24105-1L1 in AB24CD105_TX becomes AB24CD105-1L1
+// "No" is remembered per folder / file, so it isn't asked again.
+let tidyBusy = false;
+const tidyShown = new Set();
+
+/** -> [{ key, title, body, paths, ok, run }] for the open folder */
+function tidyProposals() {
+  const out = [], runs = [...state.runs.values()].filter((r) => !r.out);
+  const runsIn = (dir) => runs.filter((r) => r.dir.toLowerCase() === dir.toLowerCase());
+  const filesOf = (r) => [r.main, r.im, r.recordPath].filter(Boolean);
+  // 1. empty-holder folders inside a holder collection (holder_corrections/<this>/)
+  const holderDirs = [...new Set(runs.filter((r) => r.dry && r.autoDry).map((r) => r.dir))]
+    .filter((d) => /holder|empty|dry[ _-]?run|blank/i.test(L.basename(L.dirname(d))));
+  for (const dir of holderDirs) {
+    const here = runsIn(dir).filter((r) => r.dry);
+    const t = L.dateFromName(L.basename(dir)) ?? here.map((r) => r.time).filter((x) => x != null).sort((a, b) => a - b)[0];
+    if (t == null) continue;
+    const newDir = L.joinPath(L.dirname(dir), L.holderDirName(t));
+    // runs not named like the instrument names empty holders get its names (one per kind)
+    const renames = [];
+    for (const kind of ["HT", "LT"]) {
+      const odd = here.filter((r) => r.kind === kind && !/hotstuff|freez|frosty|empty|dry[ _-]?run|blank/i.test(r.stem));
+      if (odd.length !== 1 || here.some((r) => r.kind === kind && r !== odd[0])) continue;
+      const r = odd[0], stem = L.holderFileStem(kind, t);
+      for (const p of filesOf(r)) renames.push([p, L.joinPath(dir, L.basename(p).replace(r.stem, stem))]);
+    }
+    if (L.basename(dir) === L.holderDirName(t) && !renames.length) continue;
+    out.push({
+      key: "holder:" + dir.toLowerCase(),
+      title: "Rename this empty-holder folder?",
+      body: `Empty holder measured ${fmtDate(t)}. Its folder${renames.length ? " and runs" : ""} don't follow the lab's names – rename so it's recognised everywhere (also by cureval_correct.py):`,
+      paths: [dir, ...(L.basename(dir) !== L.holderDirName(t) ? [`→ ${L.holderDirName(t)}`] : []),
+        ...renames.map(([a, b]) => `${L.basename(a)}  →  ${L.basename(b)}`)],
+      run: async () => {
+        if (renames.length) await api.renameFiles(renames);
+        if (L.basename(dir) !== L.holderDirName(t)) await api.renameDir(dir, newDir);
+        remapSettings([...renames, [dir, newDir]]);
+      },
+    });
+  }
+  // 2. specimen folders with their runs lying directly in them
+  for (const dir of [...new Set(runs.filter((r) => !r.dry).map((r) => r.dir))]) {
+    const name = L.basename(dir);
+    if (/_(raw|corr)$/i.test(name) || /holder|empty|dry[ _-]?run|blank/i.test(name + " " + L.basename(L.dirname(dir)))) continue;
+    const here = runsIn(dir), sub = L.specimenSubdirs(name);
+    const ofSpec = here.filter((r) => (r.label.spec || "").toLowerCase() === sub.spec.toLowerCase()).length;
+    if (!/_TX$/i.test(name) && ofSpec < here.length / 2) continue;           // not a specimen folder
+    const n = here.reduce((a, r) => a + filesOf(r).length, 0);
+    out.push({
+      key: "organize:" + dir.toLowerCase(),
+      title: "Put these runs into a _raw folder?",
+      body: `${n} run file${n === 1 ? "" : "s"} lie directly in this specimen folder. Move them into ${sub.raw} and make ${sub.corr} next to it for the corrected files (the layout cureval_correct.py uses). Nothing is deleted.`,
+      paths: [dir, `→ ${sub.raw}\\  (runs)`, `→ ${sub.corr}\\  (corrected files)`],
+      run: async () => {
+        const moved = await api.organizeRuns(dir, sub.raw, sub.corr);
+        remapSettings(moved.map((p) => [L.joinPath(dir, L.basename(p)), p]));
+      },
+    });
+  }
+  // 3. a specimen ID in a file name with letters missing compared with its folder's
+  for (const r of runs.filter((x) => !x.dry && x.label.spec)) {
+    const folder = L.basename(r.dir).replace(/_TX(_raw|_corr)?$/i, "");
+    if (!L.missingLetters(r.label.spec, folder)) continue;
+    const stem = folder + r.stem.slice(r.label.spec.length);
+    const renames = filesOf(r).map((p) => [p, L.joinPath(r.dir, L.basename(p).replace(r.stem, stem))]);
+    out.push({
+      key: "typo:" + r.main.toLowerCase(),
+      title: "Fix this run's name?",
+      body: `"${r.label.spec}" looks like "${folder}" with letters missing – as it is, ${r.stem} isn't grouped with the other runs of ${folder}.`,
+      paths: [r.dir, ...renames.map(([a, b]) => `${L.basename(a)}  →  ${L.basename(b)}`)],
+      run: async () => {
+        await api.renameFiles(renames);
+        remapSettings(renames);
+        moveNotes(r, stem);
+      },
+    });
+  }
+  return out;
+}
+
+/** Offer the next tidy-up for the open folder (after the folder (re)loads). */
+async function tidyCheck() {
+  if (tidyBusy || !api.renameDir) return;
+  const next = tidyProposals().find((p) => !state.s.tidyDeclined[p.key] && !tidyShown.has(p.key));
+  if (!next) return;
+  tidyBusy = true;                        // one pop-up at a time
+  tidyShown.add(next.key);
+  const yes = await confirmDialog(next.title, next.body, next.paths, "Yes", "No");
+  if (!yes) {
+    state.s.tidyDeclined[next.key] = Date.now();
+    persist();
+    tidyBusy = false;
+    tidyCheck();
+    return;
+  }
+  setStatus(h("span", {}, h("span", { class: "spinner" }), "  Renaming…"));
+  try { await next.run(); toast("Done – the folder is reloaded"); }
+  catch (err) { toast(`Could not do it: ${err.message || err}`); }
+  tidyBusy = false;
+  openFolder(state.root, { quiet: true });   // reloads, then offers the next one
+}
+
+/** Paths in the settings follow renamed / moved files and folders ([[old, new], ...]). */
+function remapSettings(pairs) {
+  const map = (p) => {
+    if (typeof p !== "string") return p;
+    for (const [a, b] of pairs) {
+      const lo = p.toLowerCase(), al = a.toLowerCase();
+      if (lo === al) return b;
+      if (lo.startsWith(al + "\\")) return b + p.slice(a.length);
+    }
+    return p;
+  };
+  for (const k of ["overrides", "dryOverrides", "holderSmooth", "paraPick", "modelShift"]) {
+    const o = state.s[k] || {}, n = {};
+    for (const [key, v] of Object.entries(o)) n[map(key)] = k === "overrides" ? map(v) : v;
+    state.s[k] = n;
+  }
+  persist();
+}
+
+/** A renamed run keeps its notes, annotations, links and OKs. */
+function moveNotes(r, stem) {
+  const f = notesFileFor(r);
+  if (!f || f.foreign) return;
+  let moved = false;
+  for (const k of ["notes", "marks", "links", "acks"]) {
+    const o = f[k] || {};
+    if (o[r.stem] != null) { o[stem] = o[r.stem]; delete o[r.stem]; moved = true; }
+  }
+  for (const l of Object.values(f.links || {})) for (const t of Object.values(l)) if (t && t.stem === r.stem) { t.stem = stem; moved = true; }
+  if (moved) touchNotes(f);
+}
+
 /** el holding text, with the first occurrence of q marked */
 function withMatch(el, text, q) {
   const i = q ? text.toLowerCase().indexOf(q) : -1;
@@ -957,7 +1102,7 @@ function withMatch(el, text, q) {
 
 function runTooltip(r) {
   const lines = [L.basename(r.main)];
-  if (r.time) lines.push(`Measured ${fmtDateTime(r.time)}`);
+  if (r.time) lines.push(r.timeFromName ? `Measured ${fmtDate(r.time)} (date from the name – no instrument record)` : `Measured ${fmtDateTime(r.time)}`);
   if (r.record && r.record.note) lines.push(`Instrument note: ${r.record.note}`);
   if (r.dry) lines.push(`Empty holder – ${describeSmoothing(r)}, used to correct the other runs`);
   if (r.curveIm) lines.push("Out-of-phase (_Im) data merged in");
@@ -2029,7 +2174,7 @@ function correctionCard(r) {
       gapShort = days === 0 ? "same day" : `${days} d ${gap > 0 ? "later" : "earlier"}`;
     }
     body.append(h("dl", { class: "kv", style: "margin-top:12px" },
-      h("dt", {}, "Empty holder measured"), h("dd", {}, fmtDate(pair.dry.time)),
+      h("dt", {}, "Empty holder measured"), h("dd", {}, fmtDate(pair.dry.time) + (pair.dry.timeFromName ? " (from its name)" : "")),
       h("dt", {}, ""), h("dd", { class: "delta" }, gap == null ? "run date unknown" : Math.round(Math.abs(gap) / DAY) === 0 ? "same day as the run" : `${fmtDays(gap)} the run`),
       h("dt", {}, "Empty holder T range"), h("dd", {}, `${st.holderTmin.toFixed(1)} … ${st.holderTmax.toFixed(1)} °C`),
       h("dt", {}, "Out-of-phase"), h("dd", {}, res.cout ? "corrected" : r.curveIm ? "empty holder has no _Im" : "no _Im file")));
@@ -2232,7 +2377,7 @@ async function exportRuns(runs, { confirmed = false } = {}) {
 
 function pieceKey(r) { const m = /^(\d+)/.exec(r.label.piece || ""); return m ? +m[1] : 9999; }
 
-function confirmDialog(title, body, paths, okLabel) {
+function confirmDialog(title, body, paths, okLabel, cancelLabel = "Cancel") {
   return new Promise((resolve) => {
     const done = (v) => { wrap.remove(); removeEventListener("keydown", key, true); resolve(v); };
     const key = (e) => { if (e.key === "Escape") { e.stopPropagation(); done(false); } if (e.key === "Enter") { e.stopPropagation(); done(true); } };
@@ -2241,7 +2386,7 @@ function confirmDialog(title, body, paths, okLabel) {
       h("div", { class: "modal", role: "dialog" },
         h("h3", {}, title), h("p", {}, body),
         h("div", { class: "modal-paths" }, paths.map((p) => h("div", { class: "path" }, p))),
-        h("div", { class: "btn-row" }, h("button", { class: "btn", onclick: () => done(false) }, "Cancel"), ok)));
+        h("div", { class: "btn-row" }, h("button", { class: "btn", onclick: () => done(false) }, cancelLabel), ok)));
     document.body.append(wrap);
     addEventListener("keydown", key, true);
     ok.focus();
@@ -2432,7 +2577,7 @@ function wire() {
 (async function init() {
   const saved = await api.getSettings();
   state.s = { ...DEFAULTS, ...saved, model: false };      // the mineral model starts off every time
-  for (const k of ["overrides", "dryOverrides", "holderSmooth", "paraPick", "modelProps", "modelShift", "expanded", "lastSel"]) state.s[k] = { ...(saved[k] || {}) };
+  for (const k of ["overrides", "dryOverrides", "holderSmooth", "paraPick", "modelProps", "modelShift", "tidyDeclined", "expanded", "lastSel"]) state.s[k] = { ...(saved[k] || {}) };
   document.documentElement.style.setProperty("--side-w", (state.s.sideW || 300) + "px");
   if (api.nativeFrame) document.documentElement.classList.add("native-frame");
   wire();
