@@ -424,6 +424,27 @@ select:focus, .num input:focus { outline: 0; border-color: var(--accent); box-sh
 .modal-paths { max-height: 140px; overflow: auto; background: var(--bg-2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin-bottom: 14px; }
 .modal .btn-row { justify-content: flex-end; }
 .modal .btn { flex: 0 0 auto; min-width: 96px; }
+/* tidy-up questions: a coloured band per kind, then name → new name with the folder above */
+.modal.tidy { width: min(680px, 92vw); padding: 0; overflow: hidden; }
+.tidy-band { display: flex; justify-content: space-between; align-items: center; padding: 8px 20px; color: #fff;
+  font-size: 11.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.modal.tidy.holder .tidy-band { background: #b45309; }
+.modal.tidy.organize .tidy-band { background: #2563eb; }
+.modal.tidy.typo .tidy-band { background: #7c3aed; }
+.tidy-count { font-weight: 600; letter-spacing: 0; text-transform: none; opacity: .9; }
+.tidy-body { padding: 16px 20px 18px; }
+.tidy-group { margin: 12px 0 0; }
+.tidy-group-label { font-size: 11.5px; font-weight: 600; color: var(--text-2); margin-bottom: 4px; }
+.tidy-grid { display: grid; grid-template-columns: minmax(0, 1fr) 30px minmax(0, 1fr); gap: 4px 6px; align-items: center; max-height: 260px; overflow: auto; }
+.tidy-path { font-size: 11px; color: var(--text-3); overflow-wrap: break-word; align-self: end; padding-bottom: 2px; }
+.tidy-same { font-size: 10px; color: var(--text-3); text-align: center; line-height: 1.1; align-self: end; padding-bottom: 2px; }
+.tidy-path, .tidy-same { position: sticky; top: 0; background: var(--bg); z-index: 1; }
+.tidy-name { font-family: ui-monospace, Consolas, monospace; font-size: 12px; padding: 5px 8px; border-radius: 6px;
+  border: 1px solid var(--line-2); background: var(--bg-2); overflow-wrap: anywhere; }
+.tidy-name.new { border-color: color-mix(in srgb, var(--ok) 55%, var(--line-2)); background: color-mix(in srgb, var(--ok) 9%, var(--bg)); font-weight: 600; }
+.tidy-arrow { text-align: center; color: var(--text-3); font-size: 16px; }
+.tidy-extra { font-size: 12.5px; margin: 12px 0 0 !important; }
+.modal.tidy .btn-row { margin-top: 16px; }
 
 /* ---------------------------------------------------------------- plot overlays */
 .ref-temp {

@@ -225,7 +225,7 @@
   /** Standard stem of an empty-holder run, as the instrument names them: DRHOTSTUFF261013
    *  (furnace) / MRFREEZE20261013 (cryostat). */
   function holderFileStem(kind, t) { return kind === "HT" ? "DRHOTSTUFF" + ymd(t, false) : "MRFREEZE" + ymd(t, true); }
-  /** A specimen folder's raw / corrected subfolders (the layout cureval_correct.py makes):
+  /** A specimen folder's raw / corrected subfolders (the lab's layout):
    *  AB24CD105_TX -> AB24CD105_TX_raw, AB24CD105_TX_corr */
   function specimenSubdirs(folderName) {
     const spec = String(folderName).replace(/_TX$/i, "");

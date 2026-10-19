@@ -65,11 +65,13 @@ File names are expected to start with the specimen ID and end with the run code
 (`H1`, `L1`, `L2`, …), e.g. `AB24CD101-27H1.cur`.
 
 **New data:** when a folder is opened (or new folders appear in it), TX Studio offers —
-one Yes / No pop-up each, showing the paths — to bring it into the lab's layout:
+one Yes / No question each — to bring it into the lab's layout. A coloured band names the
+kind of question (empty-holder folder, specimen folder, run name) and counts them; each change
+is shown as *name → new name* with the folder above each side:
 
 * an empty-holder folder in `holder_corrections` gets the name
   `TX_holder_correction_YYYYMMDD`, and runs not named like the instrument names them
-  become `DRHOTSTUFF<YYMMDD>` / `MRFREEZE<YYYYMMDD>` (so `cureval_correct.py` finds them too);
+  become `DRHOTSTUFF<YYMMDD>` / `MRFREEZE<YYYYMMDD>`, as the instrument names them;
 * a specimen folder with its runs lying directly in it gets them moved into
   `<SPEC>_TX_raw`, with an empty `<SPEC>_TX_corr` next to it;
 * a run whose specimen ID is the folder's with letters missing (`AB24D101-27L1` in

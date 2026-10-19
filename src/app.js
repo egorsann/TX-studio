@@ -968,6 +968,7 @@ function tidyProposals() {
   const out = [], runs = [...state.runs.values()].filter((r) => !r.out);
   const runsIn = (dir) => runs.filter((r) => r.dir.toLowerCase() === dir.toLowerCase());
   const filesOf = (r) => [r.main, r.im, r.recordPath].filter(Boolean);
+  const names = (pairs) => pairs.map(([a, b]) => [L.basename(a), L.basename(b)]);
   // 1. empty-holder folders inside a holder collection (holder_corrections/<this>/)
   const holderDirs = [...new Set(runs.filter((r) => r.dry && r.autoDry).map((r) => r.dir))]
     .filter((d) => /holder|empty|dry[ _-]?run|blank/i.test(L.basename(L.dirname(d))));
@@ -975,7 +976,7 @@ function tidyProposals() {
     const here = runsIn(dir).filter((r) => r.dry);
     const t = L.dateFromName(L.basename(dir)) ?? here.map((r) => r.time).filter((x) => x != null).sort((a, b) => a - b)[0];
     if (t == null) continue;
-    const newDir = L.joinPath(L.dirname(dir), L.holderDirName(t));
+    const newName = L.holderDirName(t), newDir = L.joinPath(L.dirname(dir), newName), moveDir = L.basename(dir) !== newName;
     // runs not named like the instrument names empty holders get its names (one per kind)
     const renames = [];
     for (const kind of ["HT", "LT"]) {
@@ -984,16 +985,18 @@ function tidyProposals() {
       const r = odd[0], stem = L.holderFileStem(kind, t);
       for (const p of filesOf(r)) renames.push([p, L.joinPath(dir, L.basename(p).replace(r.stem, stem))]);
     }
-    if (L.basename(dir) === L.holderDirName(t) && !renames.length) continue;
+    if (!moveDir && !renames.length) continue;
+    const groups = [];
+    if (moveDir) groups.push({ label: "Folder", from: L.dirname(dir), to: L.dirname(dir), rows: [[L.basename(dir), newName]] });
+    if (renames.length) groups.push({ label: "Runs in it", from: dir, to: moveDir ? newDir : dir, rows: names(renames) });
     out.push({
-      key: "holder:" + dir.toLowerCase(),
-      title: "Rename this empty-holder folder?",
-      body: `Empty holder measured ${fmtDate(t)}. Its folder${renames.length ? " and runs" : ""} don't follow the lab's names – rename so it's recognised everywhere (also by cureval_correct.py):`,
-      paths: [dir, ...(L.basename(dir) !== L.holderDirName(t) ? [`→ ${L.holderDirName(t)}`] : []),
-        ...renames.map(([a, b]) => `${L.basename(a)}  →  ${L.basename(b)}`)],
+      key: "holder:" + dir.toLowerCase(), kind: "holder",
+      title: moveDir && renames.length ? "Rename the empty-holder folder and its runs?" : moveDir ? "Rename the empty-holder folder?" : "Rename the empty-holder runs?",
+      body: `Measured ${fmtDate(t)}. The names don't follow the lab's scheme – renamed in place, the empty holder is recognised and dated everywhere.`,
+      groups,
       run: async () => {
         if (renames.length) await api.renameFiles(renames);
-        if (L.basename(dir) !== L.holderDirName(t)) await api.renameDir(dir, newDir);
+        if (moveDir) await api.renameDir(dir, newDir);
         remapSettings([...renames, [dir, newDir]]);
       },
     });
@@ -1005,12 +1008,13 @@ function tidyProposals() {
     const here = runsIn(dir), sub = L.specimenSubdirs(name);
     const ofSpec = here.filter((r) => (r.label.spec || "").toLowerCase() === sub.spec.toLowerCase()).length;
     if (!/_TX$/i.test(name) && ofSpec < here.length / 2) continue;           // not a specimen folder
-    const n = here.reduce((a, r) => a + filesOf(r).length, 0);
+    const files = here.flatMap(filesOf).map((p) => L.basename(p)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     out.push({
-      key: "organize:" + dir.toLowerCase(),
-      title: "Put these runs into a _raw folder?",
-      body: `${n} run file${n === 1 ? "" : "s"} lie directly in this specimen folder. Move them into ${sub.raw} and make ${sub.corr} next to it for the corrected files (the layout cureval_correct.py uses). Nothing is deleted.`,
-      paths: [dir, `→ ${sub.raw}\\  (runs)`, `→ ${sub.corr}\\  (corrected files)`],
+      key: "organize:" + dir.toLowerCase(), kind: "organize",
+      title: `Move the runs into ${sub.raw}?`,
+      body: `${files.length} run file${files.length === 1 ? "" : "s"} lie directly in this specimen folder. They move one level down, unchanged.`,
+      groups: [{ label: "Run files", from: dir, to: L.joinPath(dir, sub.raw), rows: files.map((f) => [f, f]) }],
+      extra: `A new, empty folder ${sub.corr} is made next to it for the corrected files. Nothing is deleted.`,
       run: async () => {
         const moved = await api.organizeRuns(dir, sub.raw, sub.corr);
         remapSettings(moved.map((p) => [L.joinPath(dir, L.basename(p)), p]));
@@ -1024,10 +1028,10 @@ function tidyProposals() {
     const stem = folder + r.stem.slice(r.label.spec.length);
     const renames = filesOf(r).map((p) => [p, L.joinPath(r.dir, L.basename(p).replace(r.stem, stem))]);
     out.push({
-      key: "typo:" + r.main.toLowerCase(),
-      title: "Fix this run's name?",
-      body: `"${r.label.spec}" looks like "${folder}" with letters missing – as it is, ${r.stem} isn't grouped with the other runs of ${folder}.`,
-      paths: [r.dir, ...renames.map(([a, b]) => `${L.basename(a)}  →  ${L.basename(b)}`)],
+      key: "typo:" + r.main.toLowerCase(), kind: "typo",
+      title: "Fix the run's name?",
+      body: `“${r.label.spec}” looks like “${folder}” with letters missing – as it is, this run isn't grouped with the other runs of ${folder}.`,
+      groups: [{ label: null, from: r.dir, to: r.dir, rows: names(renames) }],
       run: async () => {
         await api.renameFiles(renames);
         remapSettings(renames);
@@ -1038,14 +1042,59 @@ function tidyProposals() {
   return out;
 }
 
+// the kinds of question, each with its colour band
+const TIDY_KINDS = { holder: "Empty-holder folder", organize: "Specimen folder", typo: "Run name" };
+// the last three folders of a path, breakable after each backslash
+const shortPath = (p) => {
+  const parts = p.split(/[\\/]/).filter(Boolean);
+  return (parts.length > 3 ? "…\\" + parts.slice(-3).join("\\") : p).replace(/\\/g, "\\​");
+};
+
+/** A tidy-up question: coloured band naming the kind (and n of m), then each change as
+ *  name → new name, the folder above each side. -> true for Yes */
+function tidyDialog(p, index, total) {
+  return new Promise((resolve) => {
+    const done = (v) => { wrap.remove(); removeEventListener("keydown", key, true); resolve(v); };
+    const key = (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); done(false); }
+      if (e.key === "Enter") { e.stopPropagation(); done(true); }
+    };
+    const yes = h("button", { class: "btn primary", onclick: () => done(true) }, "Yes");
+    const groups = p.groups.map((g) => {
+      const same = g.from.toLowerCase() === g.to.toLowerCase();
+      const grid = h("div", { class: "tidy-grid" },
+        h("div", { class: "tidy-path", title: g.from }, shortPath(g.from)),
+        h("div", { class: "tidy-same" }, same ? "same folder" : ""),
+        h("div", { class: "tidy-path", title: g.to }, shortPath(g.to)));
+      for (const [a, b] of g.rows) {
+        grid.append(h("div", { class: "tidy-name" }, a), h("div", { class: "tidy-arrow" }, "→"), h("div", { class: `tidy-name${a === b ? "" : " new"}` }, b));
+      }
+      return h("div", { class: "tidy-group" }, g.label ? h("div", { class: "tidy-group-label" }, g.label) : null, grid);
+    });
+    const wrap = h("div", { class: "modal-wrap" },
+      h("div", { class: `modal tidy ${p.kind}`, role: "dialog" },
+        h("div", { class: "tidy-band" }, h("span", {}, TIDY_KINDS[p.kind]), total > 1 ? h("span", { class: "tidy-count" }, `${index} of ${total}`) : null),
+        h("div", { class: "tidy-body" },
+          h("h3", {}, p.title), h("p", {}, p.body), ...groups,
+          p.extra ? h("p", { class: "tidy-extra" }, p.extra) : null,
+          h("div", { class: "btn-row" }, h("button", { class: "btn", onclick: () => done(false) }, "No"), yes))));
+    document.body.append(wrap);
+    addEventListener("keydown", key, true);
+    yes.focus();
+  });
+}
+
 /** Offer the next tidy-up for the open folder (after the folder (re)loads). */
+let tidyAsked = 0;                      // questions answered in this round (for "2 of 5")
 async function tidyCheck() {
   if (tidyBusy || !api.renameDir) return;
-  const next = tidyProposals().find((p) => !state.s.tidyDeclined[p.key] && !tidyShown.has(p.key));
-  if (!next) return;
+  const pending = tidyProposals().filter((p) => !state.s.tidyDeclined[p.key] && !tidyShown.has(p.key));
+  if (!pending.length) { tidyAsked = 0; return; }
+  const next = pending[0];
   tidyBusy = true;                        // one pop-up at a time
   tidyShown.add(next.key);
-  const yes = await confirmDialog(next.title, next.body, next.paths, "Yes", "No");
+  const yes = await tidyDialog(next, tidyAsked + 1, tidyAsked + pending.length);
+  tidyAsked++;
   if (!yes) {
     state.s.tidyDeclined[next.key] = Date.now();
     persist();
