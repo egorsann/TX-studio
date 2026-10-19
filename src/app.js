@@ -2519,15 +2519,41 @@ async function pickAndOpen() {
   if (p) openFolder(p);
 }
 
+/** The runs the keyboard steps through: the sidebar's runs without the empty holders. */
+function navRuns() {
+  return state.visible.filter((id) => { const r = state.runs.get(id); return r && !r.dry; });
+}
+/** Where the selection stands in the keyboard list (from an empty holder: the nearest run). */
+function navIndex(nav, delta) {
+  const i = nav.indexOf(state.anchor);
+  if (i >= 0 || !state.anchor) return i;
+  const v = state.visible.indexOf(state.anchor);
+  const after = nav.findIndex((id) => state.visible.indexOf(id) > v);
+  return delta > 0 ? (after < 0 ? nav.length - 1 : after - 1) : (after < 0 ? nav.length : after);
+}
+
 function moveSelection(delta, extend) {
-  if (!state.visible.length) return;
-  const cur = state.visible.indexOf(state.anchor);
-  const next = Math.max(0, Math.min(state.visible.length - 1, cur < 0 ? 0 : cur + delta));
-  const id = state.visible[next];
+  const nav = navRuns();
+  if (!nav.length) return;
+  const cur = navIndex(nav, delta);
+  const next = Math.max(0, Math.min(nav.length - 1, cur < 0 && delta > 0 ? 0 : cur + delta));
+  const id = nav[next];
   if (extend) {
     const s = new Set(state.selected); s.add(id); state.anchor = id;
     select([...s], { scroll: true, keepAnchor: true });
   } else select([id], { scroll: true });
+}
+
+/** Alt+Q / Alt+E: the first run of the previous / next specimen (piece) in the list. */
+function moveSpecimen(delta) {
+  const nav = navRuns();
+  if (!nav.length) return;
+  const group = (id) => groupOf(state.runs.get(id));
+  const starts = nav.filter((id, i) => i === 0 || group(id) !== group(nav[i - 1]));
+  const cur = navIndex(nav, delta), here = cur >= 0 && cur < nav.length ? group(nav[cur]) : null;
+  let k = here == null ? (delta > 0 ? -1 : starts.length) : starts.findIndex((id) => group(id) === here);
+  k = Math.max(0, Math.min(starts.length - 1, k + delta));
+  select([starts[k]], { scroll: true });
 }
 
 // ====================================================================== wiring
@@ -2586,6 +2612,8 @@ function wire() {
     const plain = !e.ctrlKey && !e.metaKey && !e.altKey, k = e.key.toLowerCase();
     // Q / E: previous / next run in the list (Shift adds to the selection, like ↑ / ↓)
     if (plain && (k === "q" || k === "e")) { e.preventDefault(); moveSelection(k === "e" ? 1 : -1, e.shiftKey); }
+    // Alt+Q / Alt+E: previous / next specimen (its first run)
+    if (!e.ctrlKey && !e.metaKey && e.altKey && (k === "q" || k === "e")) { e.preventDefault(); moveSpecimen(k === "e" ? 1 : -1); }
     // W: in-phase ↔ out-of-phase, Shift+W: both
     if (plain && k === "w" && state.selected.length) {
       e.preventDefault();

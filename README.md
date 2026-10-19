@@ -57,7 +57,8 @@ cryostat (`.clw`) — with the measurement date from the instrument record (`.KH
   raw folder (`AB24CD101_TX/AB24CD101_TX_notes.json`), so they travel with the data.
 * The folder that holds the runs is bold; single-child folders are compacted
   (`AB24CD101_TX / AB24CD101_TX_raw`); exported `_corr` folders are hidden (filter menu).
-* ↑/↓ or **Q**/**E** flip through runs, Ctrl/Shift-click overlays several, type to filter.
+* ↑/↓ or **Q**/**E** flip through runs (empty holders are skipped), **Alt+Q**/**Alt+E** jump to the
+  previous / next specimen; Ctrl/Shift-click overlays several, type to filter.
 * The **Empty holders** panel lists every empty-holder run found, how many runs each
   corrects, and the last folder is reopened next time.
 

@@ -30,7 +30,7 @@ namespace TXStudio
 {
     static class Program
     {
-        public const string Version = "0.8.4.0";
+        public const string Version = "0.8.5.0";
 
         [STAThread]
         static void Main(string[] args)
@@ -389,7 +389,8 @@ namespace TXStudio
         protected override void WndProc(ref Message m)
         {
             const int WM_SYSCOMMAND = 0x0112, SC_KEYMENU = 0xF100;
-            if (m.Msg == WM_SYSCOMMAND && ((int)m.WParam & 0xFFF0) == SC_KEYMENU && m.LParam == IntPtr.Zero) return;
+            // Alt + a letter (Alt+Q / Alt+E jump specimens) would look for a menu and beep
+            if (m.Msg == WM_SYSCOMMAND && ((int)m.WParam & 0xFFF0) == SC_KEYMENU && (int)m.LParam != ' ') return;
             base.WndProc(ref m);
         }
 
