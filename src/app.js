@@ -2597,8 +2597,8 @@ function moveSelection(delta, extend) {
   } else select([id], { scroll: true });
 }
 
-/** Alt+Q / Alt+E: the first run of the previous / next specimen folder (ER26PB002_TX ->
- *  ER26PB005_TX ...), opening that folder in the sidebar if it is collapsed. */
+/** Alt+Q / Alt+E: the first run of the previous / next specimen folder (AB24CD101_TX ->
+ *  AB24CD112_TX ...), opening that folder in the sidebar if it is collapsed. */
 function moveSpecimen(delta) {
   // every run in sidebar order as if all folders were open (folders first, as in emit)
   const q = $("#search").value.trim().toLowerCase();
