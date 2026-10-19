@@ -1598,7 +1598,7 @@ function drawPlot(runs, exportTheme) {
           if (comp === "in" && comps.length === 1 && res && res.cout) {
             for (const pk of once(L.hopkinsonPeaks(res.cout.temp, res.cout.csusc, res.cout.segment))) {
               if (own.some((o) => Math.abs(o.t - pk.t) < 25)) continue;
-              label(pk, `χ″ Hopkinson · ${pk.mineral}`, `The out-of-phase curve peaks at ${fmtT(pk.t)} °C (${pk.branch}) – a Hopkinson peak of ${pk.mineral === "Mag" ? "magnetite" : "pyrrhotite"}; E shows it`);
+              label(pk, `χ″ Hopkinson · ${pk.mineral}`, `The out-of-phase curve peaks at ${fmtT(pk.t)} °C (${pk.branch}) – a Hopkinson peak of ${pk.mineral === "Mag" ? "magnetite" : "pyrrhotite"}; W shows it`);
             }
           }
         }
@@ -2583,7 +2583,11 @@ function wire() {
     if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); moveSelection(1, e.shiftKey); }
     if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); moveSelection(-1, e.shiftKey); }
     if (e.key === "a" && (e.ctrlKey || e.metaKey) && document.activeElement.id === "tree") { e.preventDefault(); select(state.visible.slice()); }
-    if (e.key.toLowerCase() === "e" && !e.ctrlKey && !e.metaKey && !e.altKey && state.selected.length) {
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey, k = e.key.toLowerCase();
+    // Q / E: previous / next run in the list (Shift adds to the selection, like ↑ / ↓)
+    if (plain && (k === "q" || k === "e")) { e.preventDefault(); moveSelection(k === "e" ? 1 : -1, e.shiftKey); }
+    // W: in-phase ↔ out-of-phase, Shift+W: both
+    if (plain && k === "w" && state.selected.length) {
       e.preventDefault();
       setComp(e.shiftKey ? "both" : state.s.comp === "in" ? "out" : "in");
     }

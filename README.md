@@ -57,7 +57,7 @@ cryostat (`.clw`) — with the measurement date from the instrument record (`.KH
   raw folder (`AB24CD101_TX/AB24CD101_TX_notes.json`), so they travel with the data.
 * The folder that holds the runs is bold; single-child folders are compacted
   (`AB24CD101_TX / AB24CD101_TX_raw`); exported `_corr` folders are hidden (filter menu).
-* ↑/↓ flips through runs, Ctrl/Shift-click overlays several, type to filter.
+* ↑/↓ or **Q**/**E** flip through runs, Ctrl/Shift-click overlays several, type to filter.
 * The **Empty holders** panel lists every empty-holder run found, how many runs each
   corrects, and the last folder is reopened next time.
 
@@ -122,7 +122,7 @@ to the full curve.
 
 * **Hopkinson peaks** (χ peaking just below the pyrrhotite or magnetite Curie point —
   clearest in the out-of-phase curve) get a small label at the tip, naming the mineral; in
-  the in-phase view, a peak only χ″ shows is marked *χ″ Hopkinson* (E switches to it).
+  the in-phase view, a peak only χ″ shows is marked *χ″ Hopkinson* (W switches to it).
 * Zoomed in, arrows at the plot edges name the next transition beyond the view (Po, Mag,
   Hem …), or a steep χ drop / rise or the curve leaving the paramagnetic hyperbola where no
   transition is; click to jump there. Low-T plots always show **‹ Besnus 30–34 K** at the cold
@@ -137,8 +137,8 @@ to the full curve.
 **Mouse:** right-drag = zoom box (a flat box zooms temperature only, a narrow one χ only),
 left- or middle-drag = pan, wheel = zoom. Views: corrected, raw vs empty holder,
 normalised, 1/χ — in-phase, out-of-phase (button outlined red) or both (χ″ on the right
-axis, both zero lines at the same height); **E** switches in-phase ↔ out-of-phase,
-Shift+E both, and switching keeps the zoom. Heating is dark red, low-T warming dark blue,
+axis, both zero lines at the same height); **W** switches in-phase ↔ out-of-phase,
+Shift+W both, and switching keeps the zoom. Heating is dark red, low-T warming dark blue,
 cooling a dashed brighter blue; *Points* shows the measurements. *PNG* saves a
 white-background figure.
 
