@@ -2544,16 +2544,30 @@ function moveSelection(delta, extend) {
   } else select([id], { scroll: true });
 }
 
-/** Alt+Q / Alt+E: the first run of the previous / next specimen (piece) in the list. */
+/** Alt+Q / Alt+E: the first run of the previous / next specimen folder (ER26PB002_TX ->
+ *  ER26PB005_TX ...), opening that folder in the sidebar if it is collapsed. */
 function moveSpecimen(delta) {
-  const nav = navRuns();
-  if (!nav.length) return;
-  const group = (id) => groupOf(state.runs.get(id));
-  const starts = nav.filter((id, i) => i === 0 || group(id) !== group(nav[i - 1]));
-  const cur = navIndex(nav, delta), here = cur >= 0 && cur < nav.length ? group(nav[cur]) : null;
-  let k = here == null ? (delta > 0 ? -1 : starts.length) : starts.findIndex((id) => group(id) === here);
+  // every run in sidebar order as if all folders were open (folders first, as in emit)
+  const q = $("#search").value.trim().toLowerCase();
+  const order = (v) => [...v.dirs.flatMap(order), ...v.files.filter((f) => !f.im && !f.run.dry).map((f) => f.run.id)];
+  const all = state.tree ? order(viewNode(state.tree, q) || { dirs: [], files: [] }) : [];
+  if (!all.length) return;
+  // a specimen is its folder; <X>_raw / <X>_corr belong to the folder above them
+  const spec = (id) => { const d = state.runs.get(id).dir; return (/_(raw|corr)$/i.test(L.basename(d)) ? L.dirname(d) : d).toLowerCase(); };
+  const starts = all.filter((id, i) => i === 0 || spec(id) !== spec(all[i - 1]));
+  const anchor = state.runs.get(state.anchor);
+  const here = anchor && !anchor.dry ? spec(state.anchor) : null;
+  let k = here == null ? (delta > 0 ? -1 : starts.length) : starts.findIndex((id) => spec(id) === here);
   k = Math.max(0, Math.min(starts.length - 1, k + delta));
-  select([starts[k]], { scroll: true });
+  const target = state.runs.get(starts[k]);
+  // open the folders down to it, so it shows in the sidebar
+  if (!state.visible.includes(target.id)) {
+    for (let d = target.dir; d && d.length >= state.root.length; d = L.dirname(d)) state.expanded.add(d);
+    state.s.expanded[state.root] = [...state.expanded];
+    persist();
+    renderTree();
+  }
+  select([target.id], { scroll: true });
 }
 
 // ====================================================================== wiring
