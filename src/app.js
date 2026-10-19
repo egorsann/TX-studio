@@ -818,7 +818,7 @@ function setPointsShown(on) {
   if (!gd.data) return;
   const idx = [], modes = [];
   gd.data.forEach((t, i) => { if (t.isData && t.baseMode !== "markers") { idx.push(i); modes.push(on ? "lines+markers" : t.baseMode); } });
-  if (idx.length) Plotly.restyle(gd, { mode: modes }, idx);
+  if (idx.length) Promise.resolve(Plotly.restyle(gd, { mode: modes }, idx)).then(refreshHopX);
 }
 
 function findMark(name) {
@@ -1139,6 +1139,51 @@ function moveNotes(r, stem) {
   }
   for (const l of Object.values(f.links || {})) for (const t of Object.values(l)) if (t && t.stem === r.stem) { t.stem = stem; moved = true; }
   if (moved) touchNotes(f);
+}
+
+// ---------------------------------------------------------------------- dismissing Hopkinson labels
+// While Alt is held each Hopkinson label gets a small × at its end; clicking it removes that
+// suggestion (per run, component, branch and mineral) for good -- saved in the notes file.
+let hopXShown = false;
+function showHopX(on) {
+  if (on === hopXShown) return;
+  hopXShown = on;
+  $$(".plot-wrap .hop-x").forEach((e) => e.remove());
+  if (on) requestAnimationFrame(placeHopX);       // after any redraw in progress
+}
+function placeHopX() {
+  if (!hopXShown) return;
+  $$(".plot-wrap .hop-x").forEach((e) => e.remove());
+  const gd = $("#plot"), wrap = $(".plot-wrap"), wr = wrap.getBoundingClientRect();
+  (gd.layout && gd.layout.annotations || []).forEach((a, i) => {
+    if (!a.name || !a.name.startsWith("hop:")) return;
+    const g = gd.querySelector(`.annotation[data-index="${i}"] .annotation-text-g`) || gd.querySelector(`.annotation[data-index="${i}"]`);
+    const b = g && g.getBoundingClientRect();
+    if (!b || !b.width) return;
+    const x = h("button", { class: "hop-x", title: "Remove this Hopkinson suggestion for good" }, "×");
+    Object.assign(x.style, { left: b.right - wr.left + 2 + "px", top: b.top - wr.top + b.height / 2 - 8 + "px" });
+    x.addEventListener("mousedown", (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault(); e.stopPropagation();
+      const [stem, key] = a.name.slice(4).split("|");
+      dismissHop(stem, key);
+    });
+    wrap.append(x);
+  });
+}
+/** After the plot redraws or moves: the × buttons follow their labels. */
+function refreshHopX() { if (hopXShown) requestAnimationFrame(placeHopX); }
+
+function dismissHop(stem, key) {
+  const run = [...state.runs.values()].find((x) => x.stem === stem && !x.out);
+  const f = run && writableNotes(run);
+  if (!f) return;
+  const a = { ...((f.acks || {})[stem] || {}) };
+  a.hop = [...new Set([...(a.hop || []), key])];
+  f.acks = { ...(f.acks || {}), [stem]: a };
+  touchNotes(f);
+  drawPlot(state.selected.map((id) => state.runs.get(id)).filter(Boolean));
+  setStatus("Hopkinson suggestion removed");
 }
 
 /** el holding text, with the first occurrence of q marked */
@@ -1574,17 +1619,20 @@ function drawPlot(runs, exportTheme) {
         const shown = (g) => !!s[g === "cooling" ? "cooling" : "heating"];
         // at the tip: the highest plotted point of that branch within 10 °C; heating's label
         // leans left, cooling's right, so the two don't cover each other at one Curie point
-        const label = (pk, text, hovertext) => {
+        const label = (pk, text, hovertext, key) => {
           if (view === "inverse") return;
           const ys = view === "raw" ? sr.raw : sr.y;
           let k = -1;
           sr.temp.forEach((t, i) => { if (sr.segment[i] === pk.branch && Math.abs(t - pk.t) <= 10 && ys[i] != null && (k < 0 || ys[i] > ys[k])) k = i; });
           if (k < 0) return;
           const cool = pk.branch === "cooling";
-          annotations.push({ x: sr.temp[k], y: ys[k], xref: "x", yref: yaxis, text, showarrow: true, arrowhead: 0, arrowwidth: 1,
+          annotations.push({ name: `hop:${run.stem}|${key}`, x: sr.temp[k], y: ys[k], xref: "x", yref: yaxis, text, showarrow: true, arrowhead: 0, arrowwidth: 1,
             arrowcolor: cool ? theme.cool : theme.heat, ax: cool ? 26 : -26, ay: -14, standoff: 2, font: { size: 9.5, color: theme.text2 },
-            bgcolor: theme.bg, borderpad: 1, hovertext });
+            bgcolor: theme.bg, borderpad: 1, hovertext: hovertext + (exportTheme ? "" : " · Alt: × removes it") });
         };
+        // suggestions removed for good (× while Alt is held), kept in the notes file
+        const fh = notesFileFor(run);
+        const gone = new Set(((fh && fh.acks && fh.acks[run.stem]) || {}).hop || []);
         // one label per Curie point: on cooling only where heating has no peak near it
         // (a mineral that formed during the heating)
         const once = (pks) => pks.filter((p) => shown(p.branch) &&
@@ -1592,13 +1640,17 @@ function drawPlot(runs, exportTheme) {
         if (run.kind === "HT") {
           const own = once(L.hopkinsonPeaks(sr.temp, base, sr.segment));
           for (const pk of own) {
-            label(pk, `Hopkinson · ${pk.mineral}`, `Hopkinson peak at ${fmtT(pk.t)} °C (${comp === "out" ? "out-of-phase" : "in-phase"}, ${pk.branch}): χ peaks just below the ${pk.mineral === "Mag" ? "magnetite" : "pyrrhotite"} Curie point`);
+            const key = `${comp}:${pk.branch}:${pk.mineral}`;
+            if (gone.has(key)) continue;
+            label(pk, `Hopkinson · ${pk.mineral}`, `Hopkinson peak at ${fmtT(pk.t)} °C (${comp === "out" ? "out-of-phase" : "in-phase"}, ${pk.branch}): χ peaks just below the ${pk.mineral === "Mag" ? "magnetite" : "pyrrhotite"} Curie point`, key);
           }
           // in-phase alone: the peaks only the out-of-phase curve shows
           if (comp === "in" && comps.length === 1 && res && res.cout) {
             for (const pk of once(L.hopkinsonPeaks(res.cout.temp, res.cout.csusc, res.cout.segment))) {
               if (own.some((o) => Math.abs(o.t - pk.t) < 25)) continue;
-              label(pk, `χ″ Hopkinson · ${pk.mineral}`, `The out-of-phase curve peaks at ${fmtT(pk.t)} °C (${pk.branch}) – a Hopkinson peak of ${pk.mineral === "Mag" ? "magnetite" : "pyrrhotite"}; W shows it`);
+              const key = `out:${pk.branch}:${pk.mineral}`;
+              if (gone.has(key)) continue;
+              label(pk, `χ″ Hopkinson · ${pk.mineral}`, `The out-of-phase curve peaks at ${fmtT(pk.t)} °C (${pk.branch}) – a Hopkinson peak of ${pk.mineral === "Mag" ? "magnetite" : "pyrrhotite"}; W shows it`, key);
             }
           }
         }
@@ -1729,7 +1781,7 @@ function drawPlot(runs, exportTheme) {
       }
     });
     // moving the plot clears the temperature label of the last jump
-    gd.on("plotly_relayout", () => { $$(".plot-wrap .ref-temp, .plot-wrap .ref-preview").forEach((e) => e.remove()); updateJumpers(); updateMarkerSize(); });
+    gd.on("plotly_relayout", () => { $$(".plot-wrap .ref-temp, .plot-wrap .ref-preview").forEach((e) => e.remove()); updateJumpers(); updateMarkerSize(); refreshHopX(); });
     gd.on("plotly_relayouting", () => $$(".plot-wrap .ref-preview").forEach((e) => e.remove()));
     gd.addEventListener("mouseleave", () => $$(".plot-wrap .ref-preview").forEach((e) => e.remove()));
     // hovering a transition label previews its line
@@ -1740,7 +1792,7 @@ function drawPlot(runs, exportTheme) {
     });
     gd.addEventListener("mouseout", (e) => { if (e.target.closest && e.target.closest(".annotation")) $$(".plot-wrap .ref-preview").forEach((x) => x.remove()); });
   }
-  requestAnimationFrame(() => { updateJumpers(); updateMarkerSize(); });
+  requestAnimationFrame(() => { updateJumpers(); updateMarkerSize(); refreshHopX(); });
 }
 
 /** Measurement points shrink as the view widens: full size zoomed in to a quarter of the
@@ -1964,20 +2016,20 @@ function wireCrosshair() {
   };
   wrap.addEventListener("mousemove", (e) => {
     lastX = e.clientX;
-    if (e.altKey) { show(e.clientX); setPointsShown(true); } else { hide(); if (!editor) setPointsShown(false); }
+    if (e.altKey) { show(e.clientX); setPointsShown(true); showHopX(true); } else { hide(); if (!editor) setPointsShown(false); showHopX(false); }
   });
   wrap.addEventListener("mouseleave", () => { lastX = null; hide(); });
   addEventListener("keydown", (e) => {
     if (e.key !== "Alt") return;
     e.preventDefault();                       // no menu activation from a lone Alt
-    if (lastX != null) { show(lastX); setPointsShown(true); }
+    if (lastX != null) { show(lastX); setPointsShown(true); showHopX(true); }
     if (peek && peekOver) showPeek();
   });
   // Alt released: the readout, the notes panel and an untouched annotation box go away
   addEventListener("keyup", (e) => {
     if (e.key !== "Alt") return;
     e.preventDefault();
-    hide(); hidePeek(); setPointsShown(false);
+    hide(); hidePeek(); setPointsShown(false); showHopX(false);
     if (editor && !editor.locked) closeEditor();
   });
   addEventListener("blur", () => hide());
@@ -1985,6 +2037,7 @@ function wireCrosshair() {
   document.addEventListener("mousemove", (e) => {
     if (e.altKey) return;
     if ($(".note-peek")) hidePeek();
+    if (hopXShown) showHopX(false);
     if (editor && !editor.locked) closeEditor();
     if (pointsShown && !linking) setPointsShown(false);
   }, true);

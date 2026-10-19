@@ -512,6 +512,12 @@ select:focus, .num input:focus { outline: 0; border-color: var(--accent); box-sh
 }
 .mark-input:focus { outline: 0; border-color: var(--mark); box-shadow: 0 0 0 3px color-mix(in srgb, var(--mark) 22%, transparent); }
 .mark-del { margin-top: 6px; }
+.hop-x {
+  position: absolute; z-index: 6; width: 16px; height: 16px; padding: 0; border-radius: 50%; cursor: pointer;
+  border: 1px solid var(--line-2); background: var(--bg); color: var(--text-2); font-size: 12px; line-height: 13px; text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
+}
+.hop-x:hover { color: #fff; background: var(--bad); border-color: var(--bad); }
 .link-banner {
   position: absolute; z-index: 6; top: 10px; left: 50%; transform: translateX(-50%); white-space: nowrap; pointer-events: none;
   padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600;

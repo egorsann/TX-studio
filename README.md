@@ -124,6 +124,8 @@ to the full curve.
 * **Hopkinson peaks** (χ peaking just below the pyrrhotite or magnetite Curie point —
   clearest in the out-of-phase curve) get a small label at the tip, naming the mineral; in
   the in-phase view, a peak only χ″ shows is marked *χ″ Hopkinson* (W switches to it).
+  Holding Alt shows a small × at the end of each such label: clicking it removes that
+  suggestion for good (saved in the run's `_notes.json`).
 * Zoomed in, arrows at the plot edges name the next transition beyond the view (Po, Mag,
   Hem …), or a steep χ drop / rise or the curve leaving the paramagnetic hyperbola where no
   transition is; click to jump there. Low-T plots always show **‹ Besnus 30–34 K** at the cold
