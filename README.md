@@ -4,6 +4,9 @@ A desktop viewer for thermomagnetic (temperature–susceptibility, "TX") runs me
 KLY5 / MFK Kappabridges with a furnace or cryostat: browse a folder of `.cur` / `.clw`
 runs, look at the curves, and correct every run for the empty holder automatically.
 
+The industry standard for this kind of analysis is **CurEval**, developed by
+[AGICO](https://www.agico.com), which laid the revolutionary groundwork for the field.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-dark.png">
   <img src="docs/screenshots/overview-light.png" alt="TX Studio: folder sidebar, a corrected heating / cooling run with transition labels, and the empty-holder correction card">
