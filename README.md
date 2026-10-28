@@ -1,11 +1,12 @@
 # TX Studio
 
+**CurEval**, developed by [AGICO](https://agico.cz/), is the industry standard for
+thermomagnetic analysis and laid the revolutionary groundwork for the field. AGICO also
+distributes the KLY5 / MFK Kappabridges that record the raw data TX Studio reads.
+
 A desktop viewer for thermomagnetic (temperature–susceptibility, "TX") runs measured on
 KLY5 / MFK Kappabridges with a furnace or cryostat: browse a folder of `.cur` / `.clw`
 runs, look at the curves, and correct every run for the empty holder automatically.
-
-The industry standard for this kind of analysis is **CurEval**, developed by
-[AGICO](https://www.agico.com), which laid the revolutionary groundwork for the field.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/overview-dark.png">
